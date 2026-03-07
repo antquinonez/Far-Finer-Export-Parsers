@@ -235,16 +235,107 @@ if __name__ == "__main__":
 - **Progress reporting**: Print status messages to stdout during processing
 - **Output organization**: Create timestamped output directories
 
+## Structured Analysis & Planning
+
+For complex refactoring or architectural changes, create structured documentation in `working_docs/` (not tracked in git).
+
+### Recommended Document Structure
+
+```
+working_docs/
+  01-analysis.md    # Current state, duplication, issues
+  02-plan.md        # Proposed architecture, implementation phases
+  03-test-plan.md   # Test fixtures, unit tests, integration tests
+  README.md         # Summary and next steps
+```
+
+### Analysis Document Template
+
+1. **Executive Summary** - High-level findings
+2. **Current State** - File statistics, line counts
+3. **Duplication Analysis** - Identical code, near-identical code
+4. **Dependency Graph** - Class relationships
+5. **Issues Identified** - Problems to address
+6. **Complexity Metrics** - Cyclomatic complexity, method lengths
+7. **Risk Assessment** - Before/after comparison
+
+### Planning Document Template
+
+1. **Overview** - Goals and approach
+2. **Proposed Architecture** - Directory structure
+3. **Implementation Phases** - Numbered steps with code examples
+4. **Estimated Line Counts** - Before/after comparison
+
+### Test Plan Template
+
+1. **Test Structure** - Directory layout
+2. **Test Fixtures** - Shared test data (pytest fixtures)
+3. **Unit Tests** - Per-module test specifications
+4. **Integration Tests** - End-to-end test scenarios
+5. **Coverage Goals** - Per-module targets
+
+### Example: Refactoring Request
+
+When asked to analyze and plan a refactoring:
+
+1. Read all relevant source files
+2. Calculate duplication metrics
+3. Identify shared vs unique code
+4. Create `working_docs/01-analysis.md` with findings
+5. Design modular architecture
+6. Create `working_docs/02-plan.md` with code examples
+7. Define comprehensive test suite
+8. Create `working_docs/03-test-plan.md` with pytest specs
+9. Create `working_docs/README.md` summarizing next steps
+
 ## File Organization
 
 ```
 src/
-  parse_anthropic_json.py        # Full JSON output parser
-  parse_anthropic_json_simple.py # Simplified JSON output parser
-  parse_anthropic_markdown.py    # Markdown output parser
+  parse_anthropic_json.py        # Full JSON output parser (CLI)
+  parse_anthropic_json_simple.py # Simplified JSON output parser (CLI)
+  parse_anthropic_markdown.py    # Markdown output parser (CLI)
+  batch_processor.py             # Batch processing with config support
+  anthropic_parser/              # Shared modules package
+    __init__.py
+    config.py                    # Configuration management
+    file_manager.py              # File moving with conflict handling
 tests/
   test_parser.py                 # Unit tests
 pyproject.toml                   # Package config, dependencies, tool settings
 install.sh                       # Installation script
 README.md                        # Project documentation
+working_docs/                    # Analysis & planning (not tracked in git)
+config.json                      # Input/output directory config (auto-created)
+input/                           # Default input directory
+  done/                          # Processed files moved here
+output/                          # Default output directory
 ```
+
+## Batch Processing
+
+For processing multiple files with automatic file management:
+
+```bash
+# Process all conversation*.json files in input directory
+python src/batch_processor.py
+
+# Override input/output directories
+python src/batch_processor.py --input ./my_exports --output ./results
+
+# First run creates config.json with defaults
+```
+
+### Batch Processing Features
+
+- **Auto-discovery**: Finds all `conversation*.json` files in input directory
+- **Config-based**: Uses `config.json` for default paths (auto-created)
+- **File management**: Moves processed files to `input/done/`
+- **Conflict handling**: Renames duplicates using file creation date or `_N` suffix
+- **Summary output**: Creates `batch_results.json` and `processing_summary.json`
+
+### Conflict Resolution
+
+When moving files to `done/`, conflicts are handled by:
+1. If file exists, append creation date: `conversations_20250407.json`
+2. If still conflicts, add counter: `conversations_20250407_1.json`

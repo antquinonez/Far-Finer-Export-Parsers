@@ -49,3 +49,16 @@ Thumbs.db
 # Project-specific
 *_conversations/
 *_conversations_*/
+
+# Working documents (not tracked)
+working_docs/
+
+# User data directories (not tracked)
+input/
+inputs/
+output/
+test_output/
+
+# Config (user-specific paths)
+config.json
+src/config.json
