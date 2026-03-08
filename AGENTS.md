@@ -295,7 +295,6 @@ src/
   parse_anthropic_json.py        # Full JSON output parser (CLI)
   parse_anthropic_json_simple.py # Simplified JSON output parser (CLI)
   parse_anthropic_markdown.py    # Markdown output parser (CLI)
-  batch_processor.py             # Batch processing with config support
   anthropic_parser/              # Shared modules package
     __init__.py
     config.py                    # Configuration management
@@ -314,16 +313,13 @@ output/                          # Default output directory
 
 ## Batch Processing
 
-For processing multiple files with automatic file management:
+Each parser script supports batch processing from config.json:
 
 ```bash
 # Process all conversation*.json files in input directory
-python src/batch_processor.py
-
-# Override input/output directories
-python src/batch_processor.py --input ./my_exports --output ./results
-
-# First run creates config.json with defaults
+python src/parse_anthropic_json.py        # Full JSON output
+python src/parse_anthropic_json_simple.py # Simplified JSON output
+python src/parse_anthropic_markdown.py    # Markdown output
 ```
 
 ### Batch Processing Features
@@ -331,8 +327,8 @@ python src/batch_processor.py --input ./my_exports --output ./results
 - **Auto-discovery**: Finds all `conversation*.json` files in input directory
 - **Config-based**: Uses `config.json` for default paths (auto-created)
 - **File management**: Moves processed files to `input/done/`
+- **Message sorting**: Messages sorted by timestamp in output
 - **Conflict handling**: Renames duplicates using file creation date or `_N` suffix
-- **Summary output**: Creates `batch_results.json` and `processing_summary.json`
 
 ### Conflict Resolution
 
