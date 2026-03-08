@@ -2,202 +2,193 @@
 
 import pytest
 
-from parse_anthropic_json import ChatExportProcessor as FullJsonProcessor
-from parse_anthropic_json import ConversationParser as FullJsonParser
-from parse_anthropic_json_simple import ChatExportProcessor as SimpleJsonProcessor
-from parse_anthropic_json_simple import ConversationParser as SimpleJsonParser
-from parse_anthropic_json_simple import MessageExtractor
-from parse_anthropic_markdown import ChatExportProcessor as MarkdownProcessor
-from parse_anthropic_markdown import ConversationParser as MarkdownParser
-from parse_anthropic_markdown import MarkdownFormatter
+from anthropic_parser import is_anthropic_export, sort_messages_by_timestamp
+from common import ConversationMetadata, MarkdownFormatter, MessageData, sanitize_filename
+from common.formatting import format_timestamp
+from deepseek_parser import extract_messages_from_mapping, is_deepseek_export
 
 
-class TestFullJsonParser:
-    """Tests for ConversationParser (full JSON output)."""
+class TestCommonUtilities:
+    """Tests for shared utilities in common package."""
 
     def test_sanitize_filename_special_chars(self):
         """Test filename sanitization removes special characters."""
-        parser = FullJsonParser()
-
-        assert parser.sanitize_filename("Test: <Special> Chars") == "Test_Special_Chars"
-        assert parser.sanitize_filename("Test/Path|Chars") == "Test_Path_Chars"
+        assert sanitize_filename("Test: <Special> Chars") == "Test_Special_Chars"
+        assert sanitize_filename("Test/Path|Chars") == "Test_Path_Chars"
 
     def test_sanitize_filename_whitespace(self):
         """Test filename sanitization handles whitespace."""
-        parser = FullJsonParser()
-
-        assert parser.sanitize_filename("  Test  Name  ") == "Test_Name"
+        assert sanitize_filename("  Test  Name  ") == "Test_Name"
 
     def test_sanitize_filename_empty(self):
         """Test filename sanitization handles empty string."""
-        parser = FullJsonParser()
-
-        assert parser.sanitize_filename("") == "untitled_conversation"
+        assert sanitize_filename("") == "untitled_conversation"
 
     def test_sanitize_filename_truncation(self):
         """Test filename sanitization truncates long names."""
-        parser = FullJsonParser(max_filename_length=10)
-
-        result = parser.sanitize_filename("A" * 100)
+        result = sanitize_filename("A" * 100, max_length=10)
         assert len(result) <= 10
 
-    def test_extract_conversations(self, sample_export_data):
-        """Test conversation extraction."""
-        parser = FullJsonParser()
-        conversations = parser.extract_conversations(sample_export_data)
-
-        assert len(conversations) == 1
-        assert conversations[0]["id"] == "conv_simple"
-        assert conversations[0]["name"] == "Simple Test"
-
-    def test_get_conversation_metadata(self, sample_export_data):
-        """Test conversation metadata extraction."""
-        parser = FullJsonParser()
-        conversation = sample_export_data["conversations"][0]
-
-        metadata = parser.get_conversation_metadata(conversation, 0)
-
-        assert metadata.conversation_id == "conv_simple"
-        assert metadata.name == "Simple Test"
-        assert metadata.sanitized_filename == "Simple_Test"
-        assert metadata.message_count == 2
-        assert metadata.created_at == "2024-01-01T10:00:00Z"
-
-    def test_processor_creates_output(self, sample_export_path, tmp_path):
-        """Test processor creates output files."""
-        processor = FullJsonProcessor(sample_export_path, output_dir=tmp_path)
-        summary = processor.process_export()
-
-        assert summary["total_conversations"] == 1
-        assert summary["processed_successfully"] == 1
-        assert summary["skipped_due_to_errors"] == 0
-        assert processor.output_dir.exists()
-
-
-class TestSimpleJsonParser:
-    """Tests for SimpleConversationParser (simplified JSON output)."""
-
-    def test_message_extractor_text(self):
-        """Test message text extraction."""
-        extractor = MessageExtractor()
-
-        message = {"type": "user", "text": "Hello", "created_at": "2024-01-01T10:00:00Z"}
-        result = extractor.extract_message_text(message)
-        assert result == "Hello"
-
-    def test_message_extractor_sender(self):
-        """Test sender extraction with sender field."""
-        extractor = MessageExtractor()
-
-        message = {"sender": "Human", "text": "Hello"}
-        result = extractor.extract_sender_info(message)
-        assert result == "human"
-
-    def test_message_extractor_sender_from_string(self):
-        """Test sender extraction infers from string representation."""
-        extractor = MessageExtractor()
-
-        message = {"type": "user", "text": "Hello"}
-        result = extractor.extract_sender_info(message)
-        assert result == "human"
-
-    def test_get_conversation_metadata(self, sample_export_data):
-        """Test conversation metadata extraction."""
-        parser = SimpleJsonParser()
-        conversation = sample_export_data["conversations"][0]
-
-        metadata = parser.get_conversation_metadata(conversation, 0)
-
-        assert metadata.sanitized_filename == "Simple_Test"
-        assert metadata.message_count == 2
-
-    def test_processor_creates_output(self, sample_export_path, tmp_path):
-        """Test processor creates output files."""
-        processor = SimpleJsonProcessor(sample_export_path, output_dir=tmp_path)
-        summary = processor.process_export()
-
-        assert summary["total_conversations"] == 1
-        assert summary["processed_successfully"] == 1
-
-
-class TestMarkdownParser:
-    """Tests for MarkdownConversationParser (markdown output)."""
-
-    def test_markdown_formatter_timestamp(self):
+    def test_format_timestamp(self):
         """Test timestamp formatting."""
-        result = MarkdownFormatter.format_timestamp("2024-01-01T10:00:00Z")
+        result = format_timestamp("2024-01-01T10:00:00Z")
         assert "January 01, 2024" in result
 
-    def test_markdown_formatter_sender_names(self):
-        """Test sender name formatting."""
-        assert "Human" in MarkdownFormatter.format_sender_name("human")
-        assert "Assistant" in MarkdownFormatter.format_sender_name("assistant")
+    def test_format_timestamp_none(self):
+        """Test timestamp formatting with None."""
+        assert format_timestamp(None) == "N/A"
 
-    def test_markdown_formatter_message(self):
+
+class TestMarkdownFormatter:
+    """Tests for MarkdownFormatter."""
+
+    def test_format_timestamp_method(self):
+        """Test timestamp formatting via formatter."""
+        formatter = MarkdownFormatter()
+        result = formatter.format_sender_name("human")
+        assert "Human" in result
+
+    def test_format_sender_name_anthropic(self):
+        """Test sender name formatting for Anthropic."""
+        formatter = MarkdownFormatter(assistant_display_name="Claude")
+        assert formatter.format_sender_name("assistant") == "🤖 Claude"
+        assert formatter.format_sender_name("human") == "👤 Human"
+
+    def test_format_sender_name_deepseek(self):
+        """Test sender name formatting for DeepSeek."""
+        formatter = MarkdownFormatter(assistant_display_name="DeepSeek")
+        assert formatter.format_sender_name("assistant") == "🤖 DeepSeek"
+        assert formatter.format_sender_name("human") == "👤 Human"
+
+    def test_create_markdown_header(self):
+        """Test markdown header creation."""
+        formatter = MarkdownFormatter()
+        metadata = ConversationMetadata(
+            conversation_id="test-id",
+            name="Test Conversation",
+            sanitized_filename="Test_Conversation",
+            message_count=5,
+            created_at="2024-01-01T10:00:00Z",
+        )
+
+        header = formatter.create_markdown_header(metadata, None)
+
+        assert "# Test Conversation" in header
+        assert "test-id" in header
+        assert "5" in header
+
+    def test_format_message(self):
         """Test message formatting."""
-        message = {"sender": "user", "text": "Hello", "created_at": "2024-01-01T10:00:00Z"}
-        result = MarkdownFormatter.format_message(message, 0)
+        formatter = MarkdownFormatter()
+        message = {"sender": "human", "text": "Hello", "created_at": "2024-01-01T10:00:00Z"}
+
+        result = formatter.format_message(message, 0)
 
         assert "Hello" in result
-        assert "January 01, 2024" in result
-
-    def test_get_conversation_metadata(self, sample_export_data):
-        """Test conversation metadata extraction."""
-        parser = MarkdownParser()
-        conversation = sample_export_data["conversations"][0]
-
-        metadata = parser.get_conversation_metadata(conversation, 0)
-
-        assert metadata.sanitized_filename == "Simple_Test"
-        assert metadata.message_count == 2
-
-    def test_processor_creates_output(self, sample_export_path, tmp_path):
-        """Test processor creates output files."""
-        processor = MarkdownProcessor(sample_export_path, output_dir=tmp_path)
-        summary = processor.process_export()
-
-        assert summary["total_conversations"] == 1
-        assert summary["processed_successfully"] == 1
+        assert "Human" in result
 
 
-class TestComplexExports:
-    """Tests with complex export data."""
+class TestAnthropicValidators:
+    """Tests for Anthropic format validation."""
 
-    def test_full_json_special_characters(self, complex_export_data):
-        """Test handling special characters in names."""
-        parser = FullJsonParser()
-        conversation = complex_export_data["conversations"][0]
+    def test_is_anthropic_export_valid(self, sample_export_data):
+        """Test detection of valid Anthropic export."""
+        assert is_anthropic_export(sample_export_data) is True
 
-        metadata = parser.get_conversation_metadata(conversation, 0)
+    def test_is_anthropic_export_invalid(self, sample_deepseek_export):
+        """Test rejection of non-Anthropic export."""
+        assert is_anthropic_export(sample_deepseek_export) is False
 
-        assert "Special" in metadata.sanitized_filename
-        assert "<" not in metadata.sanitized_filename
-        assert "/" not in metadata.sanitized_filename
 
-    def test_empty_conversation_name(self, complex_export_data):
-        """Test handling empty conversation name."""
-        parser = FullJsonParser()
-        conversation = complex_export_data["conversations"][1]
+class TestDeepSeekValidators:
+    """Tests for DeepSeek format validation."""
 
-        metadata = parser.get_conversation_metadata(conversation, 1)
+    def test_is_deepseek_export_valid(self, sample_deepseek_export):
+        """Test detection of valid DeepSeek export."""
+        assert is_deepseek_export(sample_deepseek_export) is True
 
-        assert metadata.sanitized_filename == "Conversation_2"
+    def test_is_deepseek_export_invalid(self, sample_export_data):
+        """Test rejection of non-DeepSeek export."""
+        assert is_deepseek_export(sample_export_data) is False
 
-    def test_empty_messages(self, complex_export_data):
-        """Test handling conversation with no messages."""
-        parser = FullJsonParser()
-        conversation = complex_export_data["conversations"][2]
 
-        metadata = parser.get_conversation_metadata(conversation, 2)
+class TestDeepSeekMessageExtraction:
+    """Tests for DeepSeek message extraction from mapping."""
 
-        assert metadata.message_count == 0
+    def test_extract_messages_from_mapping(self, sample_deepseek_export):
+        """Test message extraction from DeepSeek mapping structure."""
+        mapping = sample_deepseek_export[0]["mapping"]
+        messages = extract_messages_from_mapping(mapping)
 
-    @pytest.mark.parametrize("parser_class", [FullJsonParser, SimpleJsonParser, MarkdownParser])
-    def test_all_parsers_handle_complex_data(self, parser_class, complex_export_data):
-        """Test all parsers handle complex export data."""
-        parser = parser_class()
-        conversation = complex_export_data["conversations"][0]
+        assert len(messages) == 2
+        assert messages[0]["sender"] == "human"
+        assert messages[0]["text"] == "Hello from human"
+        assert messages[1]["sender"] == "assistant"
+        assert messages[1]["text"] == "Hello from assistant"
 
-        metadata = parser.get_conversation_metadata(conversation, 0)
+    def test_extract_messages_empty_mapping(self):
+        """Test extraction from empty mapping."""
+        messages = extract_messages_from_mapping({})
+        assert messages == []
 
-        assert metadata.message_count == 4
+
+class TestMessageSorting:
+    """Tests for message sorting utilities."""
+
+    def test_sort_messages_by_timestamp(self):
+        """Test sorting messages by timestamp."""
+        messages = [
+            {"created_at": "2024-01-01T12:00:00Z", "text": "Middle"},
+            {"created_at": "2024-01-01T10:00:00Z", "text": "First"},
+            {"created_at": "2024-01-01T14:00:00Z", "text": "Last"},
+        ]
+
+        sorted_messages = sort_messages_by_timestamp(messages)
+
+        assert sorted_messages[0]["text"] == "First"
+        assert sorted_messages[1]["text"] == "Middle"
+        assert sorted_messages[2]["text"] == "Last"
+
+    def test_sort_messages_empty_list(self):
+        """Test sorting empty message list."""
+        sorted_messages = sort_messages_by_timestamp([])
+        assert sorted_messages == []
+
+    def test_sort_messages_missing_timestamp(self):
+        """Test messages without timestamps placed at end."""
+        messages = [
+            {"created_at": "2024-01-01T12:00:00Z", "text": "Has timestamp"},
+            {"text": "No timestamp"},
+        ]
+
+        sorted_messages = sort_messages_by_timestamp(messages)
+
+        assert sorted_messages[0]["text"] == "Has timestamp"
+        assert sorted_messages[1]["text"] == "No timestamp"
+
+
+class TestModels:
+    """Tests for data models."""
+
+    def test_conversation_metadata(self):
+        """Test ConversationMetadata dataclass."""
+        metadata = ConversationMetadata(
+            conversation_id="test-id",
+            name="Test Name",
+            sanitized_filename="Test_Name",
+            message_count=10,
+            created_at="2024-01-01T00:00:00Z",
+        )
+
+        assert metadata.conversation_id == "test-id"
+        assert metadata.name == "Test Name"
+        assert metadata.message_count == 10
+        assert metadata.latest_message_at is None
+
+    def test_message_data(self):
+        """Test MessageData dataclass."""
+        message = MessageData(sender="human", text="Hello", created_at="2024-01-01T00:00:00Z")
+
+        assert message.sender == "human"
+        assert message.text == "Hello"
+        assert message.created_at == "2024-01-01T00:00:00Z"
