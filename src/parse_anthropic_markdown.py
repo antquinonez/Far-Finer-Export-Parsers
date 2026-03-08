@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from anthropic_parser.config import Config
 from anthropic_parser.file_manager import move_to_done
 from anthropic_parser.message_utils import sort_messages_by_timestamp
+from anthropic_parser.validators import is_anthropic_export
 
 
 @dataclass
@@ -742,13 +743,19 @@ def main():
 
 def process_specific_file(export_file_path: Path):
     """Process a specific export file."""
-    # Try to load config for output directory, fallback to None (old behavior)
     output_dir = None
     try:
         config = Config.load()
         output_dir = config.output_dir
     except Exception:
-        pass  # No config or config error - use old behavior
+        pass
+
+    with open(export_file_path, encoding="utf-8") as f:
+        data = json.load(f)
+
+    if not is_anthropic_export(data):
+        print(f"Skipping {export_file_path}: Not an Anthropic export format")
+        sys.exit(0)
 
     try:
         processor = ChatExportProcessor(export_file_path, output_dir=output_dir)
@@ -782,10 +789,21 @@ def process_from_config():
     print(f"Output directory: {config.output_dir}")
     print(f"Found {len(input_files)} file(s) to process\n")
 
+    processed_files: list[str] = []
+    skipped_files: list[str] = []
+
     for input_file in input_files:
         print(f"{'=' * 60}")
         print(f"Processing: {input_file.name}")
         print(f"{'=' * 60}")
+
+        with open(input_file, encoding="utf-8") as f:
+            data = json.load(f)
+
+        if not is_anthropic_export(data):
+            print(f"Skipping: Not an Anthropic export format\n")
+            skipped_files.append(input_file.name)
+            continue
 
         try:
             processor = ChatExportProcessor(input_file, output_dir=config.output_dir)
@@ -793,10 +811,25 @@ def process_from_config():
 
             move_to_done(input_file, config.done_dir)
             print(f"Moved to: {config.done_dir / input_file.name}\n")
+            processed_files.append(input_file.name)
 
         except Exception as e:
             print(f"Error processing {input_file.name}: {e}\n")
             continue
+
+    print("\n" + "=" * 60)
+    print("SUMMARY")
+    print("=" * 60)
+
+    if processed_files:
+        print(f"\nPROCESSED ({len(processed_files)} file(s)):")
+        for f in processed_files:
+            print(f"  - {f}")
+
+    if skipped_files:
+        print(f"\nSKIPPED ({len(skipped_files)} file(s)):")
+        for f in skipped_files:
+            print(f"  - {f}")
 
 
 if __name__ == "__main__":
