@@ -102,11 +102,6 @@ python src/parse_deepseek_json_simple.py
 python src/parse_deepseek_markdown.py
 ```
 
-A `config.json` is auto-created on first run with defaults:
-- Input directory: `./input/`
-- Output directory: `./output/`
-- Processed files moved to: `./input/done/`
-
 The parsers automatically detect the export format (Anthropic vs DeepSeek) and will skip files that don't match their expected format.
 
 ## Supported Export Formats
@@ -159,18 +154,59 @@ DeepSeek exports use a tree-based `mapping` structure:
 
 The parser traverses the tree and maps `REQUEST` → human, `RESPONSE` → assistant.
 
+## Configuration
+
+A `config.json` is auto-created on first run:
+
+```json
+{
+  "input_dir": "./input",
+  "output_dir": "./output",
+  "providers": {
+    "anthropic": {
+      "output_prefix": "anthropic",
+      "assistant_display_name": "Claude"
+    },
+    "deepseek": {
+      "output_prefix": "deepseek",
+      "assistant_display_name": "DeepSeek"
+    }
+  }
+}
+```
+
+### Provider Configuration Options
+
+- `output_prefix`: Prefix for output directory names (e.g., `anthropic_conversations_...`)
+- `assistant_display_name`: Display name for assistant in markdown output (e.g., "🤖 Claude")
+
+You can customize these to change branding or organize outputs differently.
+
+### Default Directories
+
+- Input directory: `./input/`
+- Output directory: `./output/`
+- Processed files moved to: `./input/done/`
+
 ## Project Structure
 
 ```
 src/
+  # Shared utilities
+  common/                        # Shared across all parsers
+    __init__.py
+    config.py                    # Configuration with ProviderConfig
+    file_manager.py              # File moving with conflict handling
+    formatting.py                # sanitize_filename, format_timestamp
+    markdown.py                  # Provider-aware MarkdownFormatter
+    models.py                    # ConversationMetadata, MessageData
+
   # Anthropic parsers
   parse_anthropic_json.py        # Full JSON output
   parse_anthropic_json_simple.py # Simplified JSON output
   parse_anthropic_markdown.py    # Markdown output
-  anthropic_parser/              # Shared Anthropic modules
+  anthropic_parser/              # Anthropic-specific modules
     __init__.py
-    config.py                    # Configuration management
-    file_manager.py              # File moving with conflict handling
     message_utils.py             # Message sorting utilities
     validators.py                # Anthropic format detection
 
@@ -178,7 +214,7 @@ src/
   parse_deepseek_json.py         # Full JSON output
   parse_deepseek_json_simple.py  # Simplified JSON output
   parse_deepseek_markdown.py     # Markdown output
-  deepseek_parser/               # Shared DeepSeek modules
+  deepseek_parser/               # DeepSeek-specific modules
     __init__.py
     validators.py                # DeepSeek format detection
     message_utils.py             # Tree traversal & message extraction
@@ -186,7 +222,7 @@ src/
 input/                           # Default input directory
   done/                          # Processed files moved here
 output/                          # Default output directory
-config.json                      # Input/output directory config
+config.json                      # Configuration file
 ```
 
 ## Development
