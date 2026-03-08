@@ -1,38 +1,86 @@
 """
-Configuration management for Anthropic chat export parser.
+Configuration management for chat export parsers.
 
-Provides simple configuration for input/output directories.
+Provides configuration for input/output directories and provider-specific settings.
 Config file is auto-created with defaults if not found.
 """
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
+
+
+@dataclass
+class ProviderConfig:
+    """Configuration for a specific provider (Anthropic, DeepSeek, etc.)."""
+
+    output_prefix: str
+    assistant_display_name: str
 
 
 class Config:
     """
-    Configuration for input/output directories.
+    Configuration for input/output directories and provider settings.
 
     Config file format (config.json):
     {
         "input_dir": "./input",
-        "output_dir": "./output"
+        "output_dir": "./output",
+        "providers": {
+            "anthropic": {
+                "output_prefix": "anthropic",
+                "assistant_display_name": "Claude"
+            },
+            "deepseek": {
+                "output_prefix": "deepseek",
+                "assistant_display_name": "DeepSeek"
+            }
+        }
     }
 
     The done directory is always {input_dir}/done
     """
 
-    def __init__(self, input_dir: Path, output_dir: Path):
+    def __init__(
+        self,
+        input_dir: Path,
+        output_dir: Path,
+        providers: dict[str, ProviderConfig] | None = None,
+    ):
         """
         Initialize configuration.
 
         Args:
             input_dir: Directory containing conversation*.json files
             output_dir: Directory for processed output files
+            providers: Optional provider-specific configurations
         """
         self.input_dir = input_dir
         self.output_dir = output_dir
         self.done_dir = input_dir / "done"
+        self.providers = providers if providers is not None else self._default_providers()
+
+    @staticmethod
+    def _default_providers() -> dict[str, ProviderConfig]:
+        """Get default provider configurations."""
+        return {
+            "anthropic": ProviderConfig(output_prefix="anthropic", assistant_display_name="Claude"),
+            "deepseek": ProviderConfig(output_prefix="deepseek", assistant_display_name="DeepSeek"),
+        }
+
+    def get_provider_config(self, provider: str) -> ProviderConfig:
+        """
+        Get configuration for a specific provider.
+
+        Args:
+            provider: Provider name (e.g., "anthropic", "deepseek")
+
+        Returns:
+            ProviderConfig for the provider, or a default config
+        """
+        if provider in self.providers:
+            return self.providers[provider]
+        return ProviderConfig(output_prefix=provider, assistant_display_name=provider.title())
 
     @classmethod
     def load(cls, config_path: Path | None = None) -> "Config":
@@ -59,12 +107,22 @@ class Config:
         with open(config_path, encoding="utf-8") as f:
             data = json.load(f)
 
-        # Resolve paths relative to config file location
         base_dir = config_path.parent
         input_dir = (base_dir / data.get("input_dir", "./input")).resolve()
         output_dir = (base_dir / data.get("output_dir", "./output")).resolve()
 
-        return cls(input_dir=input_dir, output_dir=output_dir)
+        providers = cls._default_providers()
+
+        if "providers" in data:
+            for provider_name, provider_data in data["providers"].items():
+                providers[provider_name] = ProviderConfig(
+                    output_prefix=provider_data.get("output_prefix", provider_name),
+                    assistant_display_name=provider_data.get(
+                        "assistant_display_name", provider_name.title()
+                    ),
+                )
+
+        return cls(input_dir=input_dir, output_dir=output_dir, providers=providers)
 
     @classmethod
     def _create_defaults(cls, config_path: Path) -> "Config":
@@ -84,7 +142,6 @@ class Config:
         """Save configuration to JSON file with relative paths."""
         base_dir = config_path.parent
 
-        # Store paths relative to config file
         try:
             input_rel = self.input_dir.relative_to(base_dir)
             input_str = f"./{input_rel}"
@@ -97,9 +154,17 @@ class Config:
         except ValueError:
             output_str = str(self.output_dir)
 
+        providers_data = {}
+        for name, provider in self.providers.items():
+            providers_data[name] = {
+                "output_prefix": provider.output_prefix,
+                "assistant_display_name": provider.assistant_display_name,
+            }
+
         data = {
             "input_dir": input_str,
             "output_dir": output_str,
+            "providers": providers_data,
         }
 
         with open(config_path, "w", encoding="utf-8") as f:
@@ -139,10 +204,15 @@ def main():
     print(f"Input directory: {config.input_dir}")
     print(f"Output directory: {config.output_dir}")
     print(f"Done directory: {config.done_dir}")
+    print("\nProvider configurations:")
+    for name, provider in config.providers.items():
+        print(f"  {name}:")
+        print(f"    output_prefix: {provider.output_prefix}")
+        print(f"    assistant_display_name: {provider.assistant_display_name}")
 
     if args.create_dirs:
         config.ensure_directories()
-        print("Directories created.")
+        print("\nDirectories created.")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 """
-Anthropic Chat Export Parser - Markdown Output
+DeepSeek Chat Export Parser - Markdown Output
 
-Parses Anthropic chat export JSON files and creates well-formatted
+Parses DeepSeek chat export JSON files and creates well-formatted
 markdown files for each conversation.
 """
 
@@ -13,7 +13,6 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from anthropic_parser import is_anthropic_export, sort_messages_by_timestamp
 from common import (
     Config,
     ConversationMetadata,
@@ -22,97 +21,28 @@ from common import (
     move_to_done,
     sanitize_filename,
 )
+from deepseek_parser import (
+    extract_messages_from_mapping,
+    is_deepseek_export,
+    sort_messages_by_timestamp,
+)
 
 
 class MessageExtractor:
-    """
-    Extracts and normalizes message data from various Anthropic export formats.
-    """
-
-    def extract_message_text(self, message: dict[str, Any]) -> str:
-        """Extract text content from a message, handling various formats."""
-        if "text" in message and isinstance(message["text"], str):
-            return message["text"]
-
-        text_fields = ["content", "body", "message"]
-
-        for field in text_fields:
-            if field in message:
-                content = message[field]
-
-                if isinstance(content, str):
-                    return content
-                elif isinstance(content, list):
-                    text_parts = []
-                    for part in content:
-                        if isinstance(part, dict):
-                            if "text" in part:
-                                text_parts.append(part["text"])
-                            elif "content" in part:
-                                text_parts.append(str(part["content"]))
-                        elif isinstance(part, str):
-                            text_parts.append(part)
-                    return "\n".join(text_parts)
-                elif isinstance(content, dict):
-                    if "text" in content:
-                        return content["text"]
-                    elif "content" in content:
-                        return str(content["content"])
-
-        for key, value in message.items():
-            if isinstance(value, str) and len(value) > 10:
-                return value
-
-        return "[No text content found]"
-
-    def extract_sender_info(self, message: dict[str, Any]) -> str:
-        """Extract sender information from message."""
-        if "sender" in message and isinstance(message["sender"], str):
-            return message["sender"].lower()
-
-        sender_fields = ["author", "role", "from", "user"]
-
-        for field in sender_fields:
-            if field in message:
-                sender = message[field]
-
-                if isinstance(sender, str):
-                    return sender.lower()
-                elif isinstance(sender, dict) and "name" in sender:
-                    return sender["name"].lower()
-                elif isinstance(sender, dict) and "role" in sender:
-                    return sender["role"].lower()
-
-        message_str = str(message).lower()
-        if "assistant" in message_str:
-            return "assistant"
-        elif "human" in message_str or "user" in message_str:
-            return "human"
-
-        return "unknown"
-
-    def extract_timestamp(self, message: dict[str, Any]) -> str | None:
-        """Extract timestamp from message."""
-        timestamp_fields = ["created_at", "timestamp", "time", "date"]
-
-        for field in timestamp_fields:
-            if field in message and message[field]:
-                return message[field]
-
-        return None
+    """Extracts and normalizes message data from DeepSeek export format."""
 
     def process_message(self, message: dict[str, Any]) -> MessageData:
         """Process a raw message into streamlined format."""
         return MessageData(
-            sender=self.extract_sender_info(message),
-            text=self.extract_message_text(message),
-            created_at=self.extract_timestamp(message),
+            sender=message.get("sender", "unknown"),
+            text=message.get("text", ""),
+            created_at=message.get("created_at"),
         )
 
 
 class ConversationParser:
     """
-    Parses Anthropic chat export data and extracts individual conversations
+    Parses DeepSeek chat export data and extracts individual conversations
     with streamlined message format.
     """
 
@@ -120,23 +50,21 @@ class ConversationParser:
         """Initialize the parser."""
         self.message_extractor = MessageExtractor()
 
-    def extract_conversations(self, export_data: dict[str, Any]) -> list[dict[str, Any]]:
+    def extract_conversations(
+        self, export_data: dict[str, Any] | list[Any]
+    ) -> list[dict[str, Any]]:
         """Extract conversations from export data structure."""
         conversations = None
 
-        if "conversations" in export_data:
+        if isinstance(export_data, list):
+            conversations = export_data
+        elif "conversations" in export_data:
             conversations = export_data["conversations"]
         elif "data" in export_data and "conversations" in export_data["data"]:
             conversations = export_data["data"]["conversations"]
-        elif isinstance(export_data, list):
-            conversations = export_data
         else:
             for key, value in export_data.items():
-                if (
-                    isinstance(value, list)
-                    and value
-                    and any(field in str(value[0]) for field in ["messages", "chat_messages"])
-                ):
+                if isinstance(value, list) and value and "mapping" in str(value[0]):
                     conversations = value
                     break
 
@@ -149,34 +77,16 @@ class ConversationParser:
         self, conversation: dict[str, Any], index: int
     ) -> ConversationMetadata:
         """Extract metadata from a conversation object."""
-        conv_id = (
-            conversation.get("id")
-            or conversation.get("uuid")
-            or (conversation.get("conversation", {}).get("uuid"))
-            or f"conversation_{index:04d}"
-        )
+        conv_id = conversation.get("id") or f"conversation_{index:04d}"
 
-        name = (
-            conversation.get("name")
-            or conversation.get("title")
-            or conversation.get("summary")
-            or (conversation.get("conversation", {}).get("name"))
-            or f"Conversation {index + 1}"
-        )
+        name = conversation.get("title") or conversation.get("name") or f"Conversation {index + 1}"
 
-        messages = (
-            conversation.get("messages", [])
-            or conversation.get("chat_messages", [])
-            or conversation.get("conversation", {}).get("chat_messages", [])
-        )
-        message_count = len(messages) if isinstance(messages, list) else 0
+        mapping = conversation.get("mapping", {})
+        messages = extract_messages_from_mapping(mapping)
+        message_count = len(messages)
 
-        created_at = conversation.get("created_at") or conversation.get("conversation", {}).get(
-            "created_at"
-        )
-        updated_at = conversation.get("updated_at") or conversation.get("conversation", {}).get(
-            "updated_at"
-        )
+        created_at = conversation.get("inserted_at") or conversation.get("created_at")
+        updated_at = conversation.get("updated_at")
 
         return ConversationMetadata(
             conversation_id=conv_id,
@@ -189,12 +99,8 @@ class ConversationParser:
 
     def process_conversation_messages(self, conversation: dict[str, Any]) -> list[dict[str, Any]]:
         """Process conversation messages into streamlined format."""
-        messages = (
-            conversation.get("messages", [])
-            or conversation.get("chat_messages", [])
-            or conversation.get("conversation", {}).get("chat_messages", [])
-        )
-
+        mapping = conversation.get("mapping", {})
+        messages = extract_messages_from_mapping(mapping)
         messages = sort_messages_by_timestamp(messages)
 
         processed_messages = []
@@ -250,7 +156,9 @@ class ConversationParser:
 
 class ChatExportProcessor:
     """
-    Main processor for handling Anthropic chat export files.
+    Main processor for handling DeepSeek chat export files.
+
+    Processes exports into well-formatted markdown files for each conversation.
     """
 
     def __init__(self, export_file_path: str | Path, output_dir: Path | None = None):
@@ -265,7 +173,7 @@ class ChatExportProcessor:
         self.parser = ConversationParser()
         self.formatter: MarkdownFormatter | None = None
 
-    def load_export_data(self) -> dict[str, Any]:
+    def load_export_data(self) -> dict[str, Any] | list[Any]:
         """Load and parse the export JSON file."""
         print(f"Loading export file: {self.export_path}")
         print(f"File size: {self.export_path.stat().st_size / (1024 * 1024):.1f} MB")
@@ -344,7 +252,7 @@ class ChatExportProcessor:
 
         markdown_content.append("\n---\n")
         markdown_content.append(
-            f"*Exported from Anthropic Chat on {datetime.now().strftime('%B %d, %Y at %I:%M %p')}*"
+            f"*Exported from DeepSeek Chat on {datetime.now().strftime('%B %d, %Y at %I:%M %p')}*"
         )
 
         with open(output_path, "w", encoding="utf-8") as file:
@@ -353,21 +261,12 @@ class ChatExportProcessor:
         return output_path
 
     def process_export(
-        self, output_prefix: str = "anthropic", assistant_display_name: str = "Claude"
+        self, output_prefix: str = "deepseek", assistant_display_name: str = "DeepSeek"
     ) -> dict[str, Any]:
-        """
-        Main processing method that orchestrates the entire operation.
-
-        Args:
-            output_prefix: Prefix for output directory name
-            assistant_display_name: Display name for assistant in markdown
-
-        Returns:
-            Summary statistics of the processing operation
-        """
+        """Main processing method that orchestrates the entire operation."""
         self.formatter = MarkdownFormatter(assistant_display_name=assistant_display_name)
 
-        print("Starting Anthropic chat export processing (Markdown output)...")
+        print("Starting DeepSeek chat export processing (Markdown output)...")
 
         export_data = self.load_export_data()
 
@@ -441,13 +340,13 @@ def process_specific_file(export_file_path: Path):
     with open(export_file_path, encoding="utf-8") as f:
         data = json.load(f)
 
-    if not is_anthropic_export(data):
-        print(f"Skipping {export_file_path}: Not an Anthropic export format")
+    if not is_deepseek_export(data):
+        print(f"Skipping {export_file_path}: Not a DeepSeek export format")
         sys.exit(0)
 
     try:
         processor = ChatExportProcessor(export_file_path, output_dir=output_dir)
-        provider_config = config.get_provider_config("anthropic")
+        provider_config = config.get_provider_config("deepseek")
         summary = processor.process_export(
             output_prefix=provider_config.output_prefix,
             assistant_display_name=provider_config.assistant_display_name,
@@ -477,7 +376,7 @@ def process_from_config():
         print("Run with a specific file, or add files to the input directory.")
         sys.exit(0)
 
-    provider_config = config.get_provider_config("anthropic")
+    provider_config = config.get_provider_config("deepseek")
 
     print(f"Input directory: {config.input_dir}")
     print(f"Output directory: {config.output_dir}")
@@ -494,8 +393,8 @@ def process_from_config():
         with open(input_file, encoding="utf-8") as f:
             data = json.load(f)
 
-        if not is_anthropic_export(data):
-            print(f"Skipping: Not an Anthropic export format\n")
+        if not is_deepseek_export(data):
+            print(f"Skipping: Not a DeepSeek export format\n")
             skipped_files.append(input_file.name)
             continue
 

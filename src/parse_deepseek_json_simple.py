@@ -1,8 +1,8 @@
 """
-Anthropic Chat Export Parser
+DeepSeek Chat Export Parser - Streamlined Message Format
 
-Parses Anthropic chat export JSON files and organizes conversations
-into separate files with proper naming conventions.
+Parses DeepSeek chat export JSON files and extracts conversations
+with only essential message data: sender, text, and timestamp.
 """
 
 import json
@@ -13,7 +13,6 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from anthropic_parser import is_anthropic_export, sort_messages_by_timestamp
 from common import (
     Config,
     ConversationMetadata,
@@ -21,41 +20,50 @@ from common import (
     move_to_done,
     sanitize_filename,
 )
+from deepseek_parser import (
+    extract_messages_from_mapping,
+    is_deepseek_export,
+    sort_messages_by_timestamp,
+)
+
+
+class MessageExtractor:
+    """Extracts and normalizes message data from DeepSeek export format."""
+
+    def process_message(self, message: dict[str, Any]) -> MessageData:
+        """Process a raw message into streamlined format."""
+        return MessageData(
+            sender=message.get("sender", "unknown"),
+            text=message.get("text", ""),
+            created_at=message.get("created_at"),
+        )
 
 
 class ConversationParser:
     """
-    Parses Anthropic chat export data and extracts individual conversations.
+    Parses DeepSeek chat export data and extracts individual conversations
+    with streamlined message format.
     """
 
-    def extract_conversations(self, export_data: dict[str, Any]) -> list[dict[str, Any]]:
-        """
-        Extract conversations from export data structure.
+    def __init__(self):
+        """Initialize the parser."""
+        self.message_extractor = MessageExtractor()
 
-        Args:
-            export_data: Parsed JSON export data
-
-        Returns:
-            List of conversation dictionaries
-
-        Raises:
-            ValueError: If no conversations found in export
-        """
+    def extract_conversations(
+        self, export_data: dict[str, Any] | list[Any]
+    ) -> list[dict[str, Any]]:
+        """Extract conversations from export data structure."""
         conversations = None
 
-        if "conversations" in export_data:
+        if isinstance(export_data, list):
+            conversations = export_data
+        elif "conversations" in export_data:
             conversations = export_data["conversations"]
         elif "data" in export_data and "conversations" in export_data["data"]:
             conversations = export_data["data"]["conversations"]
-        elif isinstance(export_data, list):
-            conversations = export_data
         else:
             for key, value in export_data.items():
-                if (
-                    isinstance(value, list)
-                    and value
-                    and any(field in str(value[0]) for field in ["messages", "chat_messages"])
-                ):
+                if isinstance(value, list) and value and "mapping" in str(value[0]):
                     conversations = value
                     break
 
@@ -64,34 +72,64 @@ class ConversationParser:
 
         return conversations
 
-    def find_latest_message_timestamp(self, conversation: dict[str, Any]) -> str | None:
-        """
-        Find the latest created_at timestamp from messages in a conversation.
+    def get_conversation_metadata(
+        self, conversation: dict[str, Any], index: int
+    ) -> ConversationMetadata:
+        """Extract metadata from a conversation object."""
+        conv_id = conversation.get("id") or f"conversation_{index:04d}"
 
-        Args:
-            conversation: Conversation data
+        name = conversation.get("title") or conversation.get("name") or f"Conversation {index + 1}"
 
-        Returns:
-            Latest ISO format timestamp or None if no timestamps found
-        """
-        messages = (
-            conversation.get("messages", [])
-            or conversation.get("chat_messages", [])
-            or conversation.get("conversation", {}).get("chat_messages", [])
+        mapping = conversation.get("mapping", {})
+        messages = extract_messages_from_mapping(mapping)
+        message_count = len(messages)
+
+        created_at = conversation.get("inserted_at") or conversation.get("created_at")
+        updated_at = conversation.get("updated_at")
+
+        return ConversationMetadata(
+            conversation_id=conv_id,
+            name=name,
+            sanitized_filename=sanitize_filename(name),
+            message_count=message_count,
+            created_at=created_at,
+            updated_at=updated_at,
         )
 
-        if not isinstance(messages, list):
-            return None
+    def process_conversation_messages(self, conversation: dict[str, Any]) -> list[dict[str, Any]]:
+        """Process conversation messages into streamlined format."""
+        mapping = conversation.get("mapping", {})
+        messages = extract_messages_from_mapping(mapping)
+        messages = sort_messages_by_timestamp(messages)
 
+        processed_messages = []
+
+        for message in messages:
+            try:
+                message_data = self.message_extractor.process_message(message)
+
+                message_dict = {"sender": message_data.sender, "text": message_data.text}
+
+                if message_data.created_at:
+                    message_dict["created_at"] = message_data.created_at
+
+                processed_messages.append(message_dict)
+
+            except Exception as e:
+                print(f"Warning: Failed to process message: {e}")
+                processed_messages.append(
+                    {"sender": "unknown", "text": "[Message processing failed]", "error": str(e)}
+                )
+
+        return processed_messages
+
+    def find_latest_message_timestamp(self, messages: list[dict[str, Any]]) -> str | None:
+        """Find the latest created_at timestamp from a list of messages."""
         timestamps = []
 
         for message in messages:
-            if isinstance(message, dict):
-                timestamp_fields = ["created_at", "timestamp", "time", "date"]
-                for field in timestamp_fields:
-                    if field in message and message[field]:
-                        timestamps.append(message[field])
-                        break
+            if "created_at" in message and message["created_at"]:
+                timestamps.append(message["created_at"])
 
         if not timestamps:
             return None
@@ -114,74 +152,17 @@ class ConversationParser:
         except Exception:
             return timestamps[-1] if timestamps else None
 
-    def get_conversation_metadata(
-        self, conversation: dict[str, Any], index: int
-    ) -> ConversationMetadata:
-        """
-        Extract metadata from a conversation object.
-
-        Args:
-            conversation: Single conversation data
-            index: Conversation index for fallback naming
-
-        Returns:
-            ConversationMetadata object
-        """
-        conv_id = (
-            conversation.get("id")
-            or conversation.get("uuid")
-            or (conversation.get("conversation", {}).get("uuid"))
-            or f"conversation_{index:04d}"
-        )
-
-        name = (
-            conversation.get("name")
-            or conversation.get("title")
-            or conversation.get("summary")
-            or (conversation.get("conversation", {}).get("name"))
-            or f"Conversation {index + 1}"
-        )
-
-        messages = (
-            conversation.get("messages", [])
-            or conversation.get("chat_messages", [])
-            or conversation.get("conversation", {}).get("chat_messages", [])
-        )
-        message_count = len(messages) if isinstance(messages, list) else 0
-
-        created_at = conversation.get("created_at") or conversation.get("conversation", {}).get(
-            "created_at"
-        )
-        updated_at = conversation.get("updated_at") or conversation.get("conversation", {}).get(
-            "updated_at"
-        )
-
-        latest_message_at = self.find_latest_message_timestamp(conversation)
-
-        return ConversationMetadata(
-            conversation_id=conv_id,
-            name=name,
-            sanitized_filename=sanitize_filename(name),
-            message_count=message_count,
-            created_at=created_at,
-            updated_at=updated_at,
-            latest_message_at=latest_message_at,
-        )
-
 
 class ChatExportProcessor:
     """
-    Main processor for handling Anthropic chat export files.
+    Main processor for handling DeepSeek chat export files.
+
+    Processes exports into streamlined conversation files containing
+    only essential message data.
     """
 
     def __init__(self, export_file_path: str | Path, output_dir: Path | None = None):
-        """
-        Initialize processor with export file path.
-
-        Args:
-            export_file_path: Path to the Anthropic export JSON file
-            output_dir: Optional output directory (uses input file's dir if not provided)
-        """
+        """Initialize processor with export file path."""
         self.export_path = Path(export_file_path)
 
         if not self.export_path.exists():
@@ -190,18 +171,9 @@ class ChatExportProcessor:
         self.base_dir = output_dir if output_dir else self.export_path.parent
         self.output_dir: Path | None = None
         self.parser = ConversationParser()
-        self.provider_name = "anthropic"
 
-    def load_export_data(self) -> dict[str, Any]:
-        """
-        Load and parse the export JSON file.
-
-        Returns:
-            Parsed JSON data
-
-        Raises:
-            json.JSONDecodeError: If file is not valid JSON
-        """
+    def load_export_data(self) -> dict[str, Any] | list[Any]:
+        """Load and parse the export JSON file."""
         print(f"Loading export file: {self.export_path}")
         print(f"File size: {self.export_path.stat().st_size / (1024 * 1024):.1f} MB")
 
@@ -212,15 +184,7 @@ class ChatExportProcessor:
             raise json.JSONDecodeError(f"Invalid JSON in export file: {e.msg}", e.doc, e.pos)
 
     def _get_export_timestamp(self, conversations: list[dict[str, Any]]) -> str | None:
-        """
-        Find the latest updated_at timestamp from all conversations.
-
-        Args:
-            conversations: List of conversation dictionaries
-
-        Returns:
-            Latest ISO format timestamp or None if not found
-        """
+        """Find the latest updated_at timestamp from all conversations."""
         timestamps = []
         for conv in conversations:
             if conv.get("updated_at"):
@@ -232,15 +196,7 @@ class ChatExportProcessor:
         return max(timestamps)
 
     def _format_timestamp_for_dir(self, timestamp: str | None) -> str:
-        """
-        Format timestamp for directory name as YYYYMMDD_HHMMSS.
-
-        Args:
-            timestamp: ISO format timestamp or None
-
-        Returns:
-            Formatted timestamp string or fallback to file creation time
-        """
+        """Format timestamp for directory name as YYYYMMDD_HHMMSS."""
         if timestamp:
             try:
                 dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
@@ -251,7 +207,7 @@ class ChatExportProcessor:
         file_stat = self.export_path.stat()
         return datetime.fromtimestamp(file_stat.st_ctime).strftime("%Y%m%d_%H%M%S")
 
-    def create_output_directory(self, output_prefix: str) -> None:
+    def create_output_directory(self) -> None:
         """Create output directory for individual conversation files."""
         self.output_dir.mkdir(exist_ok=True)
         print(f"Output directory: {self.output_dir}")
@@ -259,17 +215,12 @@ class ChatExportProcessor:
     def save_conversation(
         self, conversation: dict[str, Any], metadata: ConversationMetadata
     ) -> Path:
-        """
-        Save individual conversation to JSON file.
+        """Save individual conversation to JSON file with streamlined format."""
+        processed_messages = self.parser.process_conversation_messages(conversation)
 
-        Args:
-            conversation: Conversation data to save
-            metadata: Conversation metadata for naming
+        latest_timestamp = self.parser.find_latest_message_timestamp(processed_messages)
 
-        Returns:
-            Path to saved file
-        """
-        timestamp_for_filename = metadata.latest_message_at or metadata.created_at
+        timestamp_for_filename = latest_timestamp or metadata.created_at
 
         date_prefix = ""
         if timestamp_for_filename:
@@ -289,51 +240,23 @@ class ChatExportProcessor:
             output_path = self.output_dir / filename
             counter += 1
 
-        sorted_conversation = self._sort_conversation_messages(conversation)
-
-        conversation_with_metadata = {
-            "metadata": {
-                "conversation_id": metadata.conversation_id,
-                "original_name": metadata.name,
-                "message_count": metadata.message_count,
-                "created_at": metadata.created_at,
-                "updated_at": metadata.updated_at,
-                "latest_message_at": metadata.latest_message_at,
-                "exported_at": datetime.now().isoformat(),
-            },
-            "conversation": sorted_conversation,
+        streamlined_conversation = {
+            "conversation_id": metadata.conversation_id,
+            "name": metadata.name,
+            "messages": processed_messages,
         }
 
+        if metadata.created_at:
+            streamlined_conversation["created_at"] = metadata.created_at
+        if metadata.updated_at:
+            streamlined_conversation["updated_at"] = metadata.updated_at
+
         with open(output_path, "w", encoding="utf-8") as file:
-            json.dump(conversation_with_metadata, file, indent=2, ensure_ascii=False)
+            json.dump(streamlined_conversation, file, indent=2, ensure_ascii=False)
 
         return output_path
 
-    def _sort_conversation_messages(self, conversation: dict[str, Any]) -> dict[str, Any]:
-        """
-        Sort messages within a conversation by timestamp.
-
-        Args:
-            conversation: Raw conversation data
-
-        Returns:
-            Conversation with sorted messages
-        """
-        result = dict(conversation)
-
-        if "conversation" in conversation and isinstance(conversation["conversation"], dict):
-            nested = dict(conversation["conversation"])
-            if "chat_messages" in nested and isinstance(nested["chat_messages"], list):
-                nested["chat_messages"] = sort_messages_by_timestamp(nested["chat_messages"])
-            result["conversation"] = nested
-        elif "chat_messages" in conversation and isinstance(conversation["chat_messages"], list):
-            result["chat_messages"] = sort_messages_by_timestamp(conversation["chat_messages"])
-        elif "messages" in conversation and isinstance(conversation["messages"], list):
-            result["messages"] = sort_messages_by_timestamp(conversation["messages"])
-
-        return result
-
-    def process_export(self, output_prefix: str = "anthropic") -> dict[str, Any]:
+    def process_export(self, output_prefix: str = "deepseek") -> dict[str, Any]:
         """
         Main processing method that orchestrates the entire operation.
 
@@ -343,7 +266,7 @@ class ChatExportProcessor:
         Returns:
             Summary statistics of the processing operation
         """
-        print("Starting Anthropic chat export processing...")
+        print("Starting DeepSeek chat export processing...")
 
         export_data = self.load_export_data()
 
@@ -352,9 +275,11 @@ class ChatExportProcessor:
 
         export_timestamp = self._get_export_timestamp(conversations)
         timestamp_str = self._format_timestamp_for_dir(export_timestamp)
-        self.output_dir = self.base_dir / f"{output_prefix}_{self.export_path.stem}_{timestamp_str}"
+        self.output_dir = (
+            self.base_dir / f"{output_prefix}_{self.export_path.stem}_{timestamp_str}_simple"
+        )
 
-        self.create_output_directory(output_prefix)
+        self.create_output_directory()
 
         processed_count = 0
         skipped_count = 0
@@ -395,13 +320,7 @@ class ChatExportProcessor:
 
 
 def main():
-    """
-    CLI entry point for the chat export processor.
-
-    Usage:
-            python parse_anthropic_json.py                      # Uses config.json
-            python parse_anthropic_json.py <path_to_export>     # Process specific file
-    """
+    """CLI entry point."""
     from pathlib import Path
 
     export_file_path = sys.argv[1] if len(sys.argv) > 1 else None
@@ -420,13 +339,13 @@ def process_specific_file(export_file_path: Path):
     with open(export_file_path, encoding="utf-8") as f:
         data = json.load(f)
 
-    if not is_anthropic_export(data):
-        print(f"Skipping {export_file_path}: Not an Anthropic export format")
+    if not is_deepseek_export(data):
+        print(f"Skipping {export_file_path}: Not a DeepSeek export format")
         sys.exit(0)
 
     try:
         processor = ChatExportProcessor(export_file_path, output_dir=output_dir)
-        provider_config = config.get_provider_config("anthropic")
+        provider_config = config.get_provider_config("deepseek")
         summary = processor.process_export(output_prefix=provider_config.output_prefix)
 
         summary_path = processor.output_dir / "processing_summary.json"
@@ -450,7 +369,7 @@ def process_from_config():
         print("Run with a specific file, or add files to the input directory.")
         sys.exit(0)
 
-    provider_config = config.get_provider_config("anthropic")
+    provider_config = config.get_provider_config("deepseek")
 
     print(f"Input directory: {config.input_dir}")
     print(f"Output directory: {config.output_dir}")
@@ -467,8 +386,8 @@ def process_from_config():
         with open(input_file, encoding="utf-8") as f:
             data = json.load(f)
 
-        if not is_anthropic_export(data):
-            print(f"Skipping: Not an Anthropic export format\n")
+        if not is_deepseek_export(data):
+            print(f"Skipping: Not a DeepSeek export format\n")
             skipped_files.append(input_file.name)
             continue
 

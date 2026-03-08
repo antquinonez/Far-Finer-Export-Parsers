@@ -5,28 +5,28 @@
       "name": "Complex Test: <Special> Characters/File?Name",
       "created_at": "2024-02-01T09:00:00Z",
       "updated_at": "2024-02-01T15:30:00Z",
-      "messages": [
+      "chat_messages": [
         {
           "id": "msg_101",
-          "type": "user",
+          "sender": "human",
           "text": "What is the capital of France?",
           "created_at": "2024-02-01T09:00:00Z"
         },
         {
           "id": "msg_102",
-          "type": "assistant",
+          "sender": "assistant",
           "text": "The capital of France is Paris.",
           "created_at": "2024-02-01T09:05:00Z"
         },
         {
           "id": "msg_103",
-          "type": "user",
+          "sender": "human",
           "text": "Can you explain quantum computing?",
           "created_at": "2024-02-01T10:00:00Z"
         },
         {
           "id": "msg_104",
-          "type": "assistant",
+          "sender": "assistant",
           "text": "Quantum computing uses quantum bits (qubits) that can exist in superposition states.",
           "created_at": "2024-02-01T10:15:00Z"
         }
@@ -36,10 +36,10 @@
       "id": "conv_empty_name",
       "name": "",
       "created_at": "2024-03-01T08:00:00Z",
-      "messages": [
+      "chat_messages": [
         {
           "id": "msg_201",
-          "type": "user",
+          "sender": "human",
           "text": "Test message",
           "created_at": "2024-03-01T08:00:00Z"
         }
@@ -49,7 +49,7 @@
       "id": "conv_no_messages",
       "name": "Empty Conversation",
       "created_at": "2024-04-01T08:00:00Z",
-      "messages": []
+      "chat_messages": []
     }
   ]
 }

@@ -1,11 +1,10 @@
-"""Unit tests for anthropic_parser modules."""
+"""Unit tests for common modules."""
 
 import tempfile
 from pathlib import Path
 
-from anthropic_parser.config import Config
-from anthropic_parser.file_manager import move_to_done
-from anthropic_parser.message_utils import sort_messages_by_timestamp
+from common import Config, ProviderConfig, move_to_done
+from common.formatting import sanitize_filename
 
 
 class TestConfig:
@@ -59,6 +58,28 @@ class TestConfig:
             assert len(files) == 2
             assert all("conversation" in f.name for f in files)
 
+    def test_config_default_providers(self):
+        """Test default provider configurations."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = Config(input_dir=Path(tmpdir) / "input", output_dir=Path(tmpdir) / "output")
+
+            anthropic_config = config.get_provider_config("anthropic")
+            assert anthropic_config.output_prefix == "anthropic"
+            assert anthropic_config.assistant_display_name == "Claude"
+
+            deepseek_config = config.get_provider_config("deepseek")
+            assert deepseek_config.output_prefix == "deepseek"
+            assert deepseek_config.assistant_display_name == "DeepSeek"
+
+    def test_config_unknown_provider(self):
+        """Test unknown provider returns sensible defaults."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = Config(input_dir=Path(tmpdir) / "input", output_dir=Path(tmpdir) / "output")
+
+            unknown_config = config.get_provider_config("unknown_provider")
+            assert unknown_config.output_prefix == "unknown_provider"
+            assert unknown_config.assistant_display_name == "Unknown_Provider"
+
 
 class TestFileManager:
     """Tests for file_manager module."""
@@ -103,36 +124,23 @@ class TestFileManager:
             assert existing_file.read_text() == "existing content"
 
 
-class TestMessageUtils:
-    """Tests for message_utils module."""
+class TestFormatting:
+    """Tests for formatting utilities."""
 
-    def test_sort_messages_by_timestamp(self):
-        """Test sorting messages by timestamp."""
-        messages = [
-            {"created_at": "2024-01-01T12:00:00Z", "text": "Middle"},
-            {"created_at": "2024-01-01T10:00:00Z", "text": "First"},
-            {"created_at": "2024-01-01T14:00:00Z", "text": "Last"},
-        ]
+    def test_sanitize_filename_special_chars(self):
+        """Test filename sanitization removes special characters."""
+        assert sanitize_filename("Test: <Special> Chars") == "Test_Special_Chars"
+        assert sanitize_filename("Test/Path|Chars") == "Test_Path_Chars"
 
-        sorted_messages = sort_messages_by_timestamp(messages)
+    def test_sanitize_filename_whitespace(self):
+        """Test filename sanitization handles whitespace."""
+        assert sanitize_filename("  Test  Name  ") == "Test_Name"
 
-        assert sorted_messages[0]["text"] == "First"
-        assert sorted_messages[1]["text"] == "Middle"
-        assert sorted_messages[2]["text"] == "Last"
+    def test_sanitize_filename_empty(self):
+        """Test filename sanitization handles empty string."""
+        assert sanitize_filename("") == "untitled_conversation"
 
-    def test_sort_messages_empty_list(self):
-        """Test sorting empty message list."""
-        sorted_messages = sort_messages_by_timestamp([])
-        assert sorted_messages == []
-
-    def test_sort_messages_missing_timestamp(self):
-        """Test messages without timestamps placed at end."""
-        messages = [
-            {"created_at": "2024-01-01T12:00:00Z", "text": "Has timestamp"},
-            {"text": "No timestamp"},
-        ]
-
-        sorted_messages = sort_messages_by_timestamp(messages)
-
-        assert sorted_messages[0]["text"] == "Has timestamp"
-        assert sorted_messages[1]["text"] == "No timestamp"
+    def test_sanitize_filename_truncation(self):
+        """Test filename sanitization truncates long names."""
+        result = sanitize_filename("A" * 100, max_length=10)
+        assert len(result) <= 10
