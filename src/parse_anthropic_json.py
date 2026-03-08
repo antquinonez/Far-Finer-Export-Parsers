@@ -255,11 +255,8 @@ class ChatExportProcessor:
         if not self.export_path.exists():
             raise FileNotFoundError(f"Export file not found: {self.export_path}")
 
-        file_stat = self.export_path.stat()
-        file_creation_date = datetime.fromtimestamp(file_stat.st_ctime).strftime("%Y%m%d")
-
-        base_dir = output_dir if output_dir else self.export_path.parent
-        self.output_dir = base_dir / f"{self.export_path.stem}_conversations_{file_creation_date}"
+        self.base_dir = output_dir if output_dir else self.export_path.parent
+        self.output_dir: Path | None = None
         self.parser = ConversationParser()
 
     def load_export_data(self) -> dict[str, Any]:
@@ -281,6 +278,46 @@ class ChatExportProcessor:
                 return json.load(file)
         except json.JSONDecodeError as e:
             raise json.JSONDecodeError(f"Invalid JSON in export file: {e.msg}", e.doc, e.pos)
+
+    def _get_export_timestamp(self, conversations: list[dict[str, Any]]) -> str | None:
+        """
+        Find the latest updated_at timestamp from all conversations.
+
+        Args:
+            conversations: List of conversation dictionaries
+
+        Returns:
+            Latest ISO format timestamp or None if not found
+        """
+        timestamps = []
+        for conv in conversations:
+            if conv.get("updated_at"):
+                timestamps.append(conv["updated_at"])
+
+        if not timestamps:
+            return None
+
+        return max(timestamps)
+
+    def _format_timestamp_for_dir(self, timestamp: str | None) -> str:
+        """
+        Format timestamp for directory name as YYYYMMDD_HHMMSS.
+
+        Args:
+            timestamp: ISO format timestamp or None
+
+        Returns:
+            Formatted timestamp string or fallback to file creation time
+        """
+        if timestamp:
+            try:
+                dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                return dt.strftime("%Y%m%d_%H%M%S")
+            except (ValueError, AttributeError):
+                pass
+
+        file_stat = self.export_path.stat()
+        return datetime.fromtimestamp(file_stat.st_ctime).strftime("%Y%m%d_%H%M%S")
 
     def create_output_directory(self) -> None:
         """Create output directory for individual conversation files."""
@@ -380,17 +417,17 @@ class ChatExportProcessor:
         """
         print("Starting Anthropic chat export processing...")
 
-        # Load export data
         export_data = self.load_export_data()
 
-        # Extract conversations
         conversations = self.parser.extract_conversations(export_data)
         print(f"Found {len(conversations)} conversations")
 
-        # Create output directory
+        export_timestamp = self._get_export_timestamp(conversations)
+        timestamp_str = self._format_timestamp_for_dir(export_timestamp)
+        self.output_dir = self.base_dir / f"anthropic_{self.export_path.stem}_{timestamp_str}"
+
         self.create_output_directory()
 
-        # Process each conversation
         processed_count = 0
         skipped_count = 0
         total_messages = 0
@@ -410,7 +447,6 @@ class ChatExportProcessor:
                 skipped_count += 1
                 continue
 
-        # Return summary
         summary = {
             "total_conversations": len(conversations),
             "processed_successfully": processed_count,

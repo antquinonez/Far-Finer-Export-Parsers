@@ -418,13 +418,8 @@ class ChatExportProcessor:
         if not self.export_path.exists():
             raise FileNotFoundError(f"Export file not found: {self.export_path}")
 
-        file_stat = self.export_path.stat()
-        file_creation_date = datetime.fromtimestamp(file_stat.st_ctime).strftime("%Y%m%d")
-
-        base_dir = output_dir if output_dir else self.export_path.parent
-        self.output_dir = (
-            base_dir / f"{self.export_path.stem}_conversations_{file_creation_date}_simple"
-        )
+        self.base_dir = output_dir if output_dir else self.export_path.parent
+        self.output_dir: Path | None = None
         self.parser = ConversationParser()
 
     def load_export_data(self) -> dict[str, Any]:
@@ -447,11 +442,50 @@ class ChatExportProcessor:
         except json.JSONDecodeError as e:
             raise json.JSONDecodeError(f"Invalid JSON in export file: {e.msg}", e.doc, e.pos)
 
+    def _get_export_timestamp(self, conversations: list[dict[str, Any]]) -> str | None:
+        """
+        Find the latest updated_at timestamp from all conversations.
+
+        Args:
+            conversations: List of conversation dictionaries
+
+        Returns:
+            Latest ISO format timestamp or None if not found
+        """
+        timestamps = []
+        for conv in conversations:
+            if conv.get("updated_at"):
+                timestamps.append(conv["updated_at"])
+
+        if not timestamps:
+            return None
+
+        return max(timestamps)
+
+    def _format_timestamp_for_dir(self, timestamp: str | None) -> str:
+        """
+        Format timestamp for directory name as YYYYMMDD_HHMMSS.
+
+        Args:
+            timestamp: ISO format timestamp or None
+
+        Returns:
+            Formatted timestamp string or fallback to file creation time
+        """
+        if timestamp:
+            try:
+                dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                return dt.strftime("%Y%m%d_%H%M%S")
+            except (ValueError, AttributeError):
+                pass
+
+        file_stat = self.export_path.stat()
+        return datetime.fromtimestamp(file_stat.st_ctime).strftime("%Y%m%d_%H%M%S")
+
     def create_output_directory(self) -> None:
         """Create output directory for individual conversation files."""
-        simple_output_dir = self.output_dir.parent / f"{self.output_dir.name}_simple"
-        simple_output_dir.mkdir(exist_ok=True)
-        print(f"Output directory: {simple_output_dir}")
+        self.output_dir.mkdir(exist_ok=True)
+        print(f"Output directory: {self.output_dir}")
 
     def save_conversation(
         self, conversation: dict[str, Any], metadata: ConversationMetadata
@@ -466,49 +500,36 @@ class ChatExportProcessor:
         Returns:
             Path to saved file
         """
-        # Create simple output directory
-        simple_output_dir = self.output_dir.parent / f"{self.output_dir.name}_simple"
-        simple_output_dir.mkdir(exist_ok=True)
-
-        # Process messages to streamlined format
         processed_messages = self.parser.process_conversation_messages(conversation)
 
-        # Find the latest message timestamp
         latest_timestamp = self.parser.find_latest_message_timestamp(processed_messages)
 
-        # Use latest message timestamp for filename, fallback to conversation metadata timestamp
         timestamp_for_filename = latest_timestamp or metadata.created_at
 
-        # Create filename with timestamp prefix
         date_prefix = ""
         if timestamp_for_filename:
             try:
-                # Parse ISO timestamp and format as YYYYMMDD_HHMMSS
                 dt = datetime.fromisoformat(timestamp_for_filename.replace("Z", "+00:00"))
                 date_prefix = dt.strftime("%Y%m%d_%H%M%S_")
             except (ValueError, AttributeError):
-                # Fallback if timestamp parsing fails
                 date_prefix = ""
 
         filename = f"{date_prefix}{metadata.sanitized_filename}.json"
-        output_path = simple_output_dir / filename
+        output_path = self.output_dir / filename
 
-        # Handle filename conflicts
         counter = 1
         while output_path.exists():
             base_name = f"{date_prefix}{metadata.sanitized_filename}"
             filename = f"{base_name}_{counter:02d}.json"
-            output_path = simple_output_dir / filename
+            output_path = self.output_dir / filename
             counter += 1
 
-        # Create streamlined conversation structure
         streamlined_conversation = {
             "conversation_id": metadata.conversation_id,
             "name": metadata.name,
             "messages": processed_messages,
         }
 
-        # Optionally include conversation timestamps if available
         if metadata.created_at:
             streamlined_conversation["created_at"] = metadata.created_at
         if metadata.updated_at:
@@ -528,17 +549,19 @@ class ChatExportProcessor:
         """
         print("Starting Anthropic chat export processing...")
 
-        # Load export data
         export_data = self.load_export_data()
 
-        # Extract conversations
         conversations = self.parser.extract_conversations(export_data)
         print(f"Found {len(conversations)} conversations")
 
-        # Create output directory
+        export_timestamp = self._get_export_timestamp(conversations)
+        timestamp_str = self._format_timestamp_for_dir(export_timestamp)
+        self.output_dir = (
+            self.base_dir / f"anthropic_{self.export_path.stem}_{timestamp_str}_simple"
+        )
+
         self.create_output_directory()
 
-        # Process each conversation
         processed_count = 0
         skipped_count = 0
         total_messages = 0
@@ -558,20 +581,18 @@ class ChatExportProcessor:
                 skipped_count += 1
                 continue
 
-        # Return summary
-        simple_output_dir = self.output_dir.parent / f"{self.output_dir.name}_simple"
         summary = {
             "total_conversations": len(conversations),
             "processed_successfully": processed_count,
             "skipped_due_to_errors": skipped_count,
             "total_messages": total_messages,
-            "output_directory": str(simple_output_dir),
+            "output_directory": str(self.output_dir),
         }
 
         print("\nProcessing completed!")
         print(f"Successfully processed: {processed_count} conversations")
         print(f"Total messages: {total_messages}")
-        print(f"Output directory: {simple_output_dir}")
+        print(f"Output directory: {self.output_dir}")
 
         if skipped_count > 0:
             print(f"Skipped due to errors: {skipped_count}")
@@ -612,8 +633,7 @@ def process_specific_file(export_file_path: Path):
         processor = ChatExportProcessor(export_file_path, output_dir=output_dir)
         summary = processor.process_export()
 
-        simple_output_dir = processor.output_dir
-        summary_path = simple_output_dir / "processing_summary.json"
+        summary_path = processor.output_dir / "processing_summary.json"
         with open(summary_path, "w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2)
         print(f"Processing summary saved to: {summary_path}")
