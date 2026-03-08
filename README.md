@@ -1,6 +1,6 @@
-# Anthropic Chat Export Parser
+# Chat Export Parsers
 
-Parse Anthropic chat export JSON files into structured formats: full JSON, simplified JSON, or Markdown.
+Parse Anthropic and DeepSeek chat export JSON files into structured formats: full JSON, simplified JSON, or Markdown.
 
 ## Installation
 
@@ -28,90 +28,166 @@ pip install -e ".[dev]"
 
 ## Usage
 
-### Command Line
+### CLI Commands (After Installation)
 
-After installation, use the installed commands:
-
+**Anthropic Exports:**
 ```bash
-# Full JSON output (preserves all data)
-parse-anthropic-json <path_to_export.json>
-
-# Simplified JSON output (sender, text, timestamp only)
-parse-anthropic-json-simple <path_to_export.json>
-
-# Markdown output (human-readable)
-parse-anthropic-markdown <path_to_export.json>
+parse-anthropic-json <file>        # Full JSON output
+parse-anthropic-json-simple <file> # Simplified JSON output
+parse-anthropic-markdown <file>    # Markdown output
 ```
 
-Or run directly without installation:
-
+**DeepSeek Exports:**
 ```bash
-python src/parse_anthropic_json.py <path_to_export.json>
-python src/parse_anthropic_json_simple.py <path_to_export.json>
-python src/parse_anthropic_markdown.py <path_to_export.json>
+parse-deepseek-json <file>        # Full JSON output
+parse-deepseek-json-simple <file> # Simplified JSON output
+parse-deepseek-markdown <file>    # Markdown output
+```
+
+### Direct Execution (Without Installation)
+
+**Anthropic Exports:**
+```bash
+python src/parse_anthropic_json.py <file>
+python src/parse_anthropic_json_simple.py <file>
+python src/parse_anthropic_markdown.py <file>
+```
+
+**DeepSeek Exports:**
+```bash
+python src/parse_deepseek_json.py <file>
+python src/parse_deepseek_json_simple.py <file>
+python src/parse_deepseek_markdown.py <file>
 ```
 
 ### Output Formats
 
-| Format | Script | Description |
-|--------|--------|-------------|
-| Full JSON | `parse_anthropic_json.py` | Preserves all original data with metadata |
-| Simple JSON | `parse_anthropic_json_simple.py` | Only sender, text, timestamp per message |
-| Markdown | `parse_anthropic_markdown.py` | Human-readable with formatting |
+| Format | Description | Anthropic Script | DeepSeek Script |
+|--------|-------------|------------------|-----------------|
+| Full JSON | Preserves all original data with metadata | `parse_anthropic_json.py` | `parse_deepseek_json.py` |
+| Simple JSON | Only sender, text, timestamp per message | `parse_anthropic_json_simple.py` | `parse_deepseek_json_simple.py` |
+| Markdown | Human-readable with formatting | `parse_anthropic_markdown.py` | `parse_deepseek_markdown.py` |
 
 ### Output Location
 
-Each parser creates a timestamped output directory in the same location as the input file (or in the configured output directory):
+Each parser creates a timestamped output directory:
 
+**Anthropic:**
 ```
 anthropic_{stem}_{YYYYMMDD_HHMMSS}/           # Full JSON
 anthropic_{stem}_{YYYYMMDD_HHMMSS}_simple/    # Simple JSON
 anthropic_{stem}_{YYYYMMDD_HHMMSS}_markdown/  # Markdown
 ```
 
-For example, processing `conversations.json` creates:
-- `anthropic_conversations_20260305_160057/`
-- `anthropic_conversations_20260305_160057_simple/`
-- `anthropic_conversations_20260305_160057_markdown/`
-
-The timestamp is extracted from the export data (latest `updated_at` field) with a fallback to file creation time.
+**DeepSeek:**
+```
+deepseek_{stem}_{YYYYMMDD_HHMMSS}/           # Full JSON
+deepseek_{stem}_{YYYYMMDD_HHMMSS}_simple/    # Simple JSON
+deepseek_{stem}_{YYYYMMDD_HHMMSS}_markdown/  # Markdown
+```
 
 ### Batch Processing
 
 Process all `conversation*.json` files in the input directory using `config.json`:
 
 ```bash
-# Without arguments, uses config.json for input/output paths
+# Anthropic (no arguments = use config.json)
 python src/parse_anthropic_json.py
 python src/parse_anthropic_json_simple.py
 python src/parse_anthropic_markdown.py
+
+# DeepSeek (no arguments = use config.json)
+python src/parse_deepseek_json.py
+python src/parse_deepseek_json_simple.py
+python src/parse_deepseek_markdown.py
 ```
 
 A `config.json` is auto-created on first run with defaults:
-- Input: `./input/`
-- Output: `./output/`
-- Processed files moved to: `./input/done/`
-
-For `conversations.json`, the output directories would be:
-- `anthropic_conversations_20260305_160057/` (full JSON)
-- `anthropic_conversations_20260305_160057_simple/` (simple JSON)
-- `anthropic_conversations_20260305_160057_markdown/` (markdown)
-
-### Batch Processing
-
-Process all `conversation*.json` files in the input directory using `config.json`:
-
-```bash
-# Without arguments, processes all files in input directory
-python src/parse_anthropic_json.py
-python src/parse_anthropic_json_simple.py
-python src/parse_anthropic_markdown.py
-```
-
-A `config.json` file is auto-created on first run with defaults:
 - Input directory: `./input/`
 - Output directory: `./output/`
 - Processed files moved to: `./input/done/`
+
+The parsers automatically detect the export format (Anthropic vs DeepSeek) and will skip files that don't match their expected format.
+
+## Supported Export Formats
+
+### Anthropic Exports
+
+Anthropic exports have a flat `chat_messages` array structure:
+
+```json
+{
+  "conversations": [
+    {
+      "id": "...",
+      "name": "Conversation Name",
+      "chat_messages": [
+        {
+          "sender": "human",
+          "text": "message content",
+          "created_at": "2024-01-01T00:00:00Z"
+        }
+      ]
+    }
+  ]
+}
+```
+
+### DeepSeek Exports
+
+DeepSeek exports use a tree-based `mapping` structure:
+
+```json
+[
+  {
+    "id": "uuid",
+    "title": "Conversation Title",
+    "mapping": {
+      "root": {"children": ["1"]},
+      "1": {
+        "message": {
+          "fragments": [
+            {"type": "REQUEST", "content": "User message"}
+          ],
+          "inserted_at": "2026-01-01T00:00:00+08:00"
+        }
+      }
+    }
+  }
+]
+```
+
+The parser traverses the tree and maps `REQUEST` → human, `RESPONSE` → assistant.
+
+## Project Structure
+
+```
+src/
+  # Anthropic parsers
+  parse_anthropic_json.py        # Full JSON output
+  parse_anthropic_json_simple.py # Simplified JSON output
+  parse_anthropic_markdown.py    # Markdown output
+  anthropic_parser/              # Shared Anthropic modules
+    __init__.py
+    config.py                    # Configuration management
+    file_manager.py              # File moving with conflict handling
+    message_utils.py             # Message sorting utilities
+    validators.py                # Anthropic format detection
+
+  # DeepSeek parsers
+  parse_deepseek_json.py         # Full JSON output
+  parse_deepseek_json_simple.py  # Simplified JSON output
+  parse_deepseek_markdown.py     # Markdown output
+  deepseek_parser/               # Shared DeepSeek modules
+    __init__.py
+    validators.py                # DeepSeek format detection
+    message_utils.py             # Tree traversal & message extraction
+
+input/                           # Default input directory
+  done/                          # Processed files moved here
+output/                          # Default output directory
+config.json                      # Input/output directory config
+```
 
 ## Development
 
@@ -122,10 +198,10 @@ A `config.json` file is auto-created on first run with defaults:
 pytest
 
 # Run specific test file
-pytest tests/test_parsers.py
+pytest tests/test_parser.py
 
 # Run single test with verbose output
-pytest tests/test_parsers.py::TestFullJsonParser::test_sanitize_filename_special_chars -v
+pytest tests/test_parser.py::test_extract_message_text -v
 
 # Run with coverage
 pytest --cov=src tests/

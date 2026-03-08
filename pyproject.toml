@@ -33,6 +33,9 @@ dev = [
 parse-anthropic-json = "src.parse_anthropic_json:main"
 parse-anthropic-json-simple = "src.parse_anthropic_json_simple:main"
 parse-anthropic-markdown = "src.parse_anthropic_markdown:main"
+parse-deepseek-json = "src.parse_deepseek_json:main"
+parse-deepseek-json-simple = "src.parse_deepseek_json_simple:main"
+parse-deepseek-markdown = "src.parse_deepseek_markdown:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
