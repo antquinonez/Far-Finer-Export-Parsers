@@ -1,82 +1,32 @@
 """
 Anthropic Chat Export Parser
 
-Parses large Anthropic chat export JSON files and organizes conversations
+Parses Anthropic chat export JSON files and organizes conversations
 into separate files with proper naming conventions.
 """
 
 import json
-import re
 import sys
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-# Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
-from anthropic_parser.config import Config
-from anthropic_parser.file_manager import move_to_done
-from anthropic_parser.message_utils import sort_messages_by_timestamp
-from anthropic_parser.validators import is_anthropic_export
-
-
-@dataclass
-class ConversationMetadata:
-    """Metadata for a parsed conversation."""
-
-    conversation_id: str
-    name: str
-    sanitized_filename: str
-    message_count: int
-    created_at: str | None = None
-    updated_at: str | None = None
-    latest_message_at: str | None = None
+from anthropic_parser import is_anthropic_export, sort_messages_by_timestamp
+from common import (
+    Config,
+    ConversationMetadata,
+    MessageData,
+    move_to_done,
+    sanitize_filename,
+)
 
 
 class ConversationParser:
     """
     Parses Anthropic chat export data and extracts individual conversations.
-
-    Handles large JSON files efficiently and provides clean separation
-    of parsing logic from file operations.
     """
-
-    def __init__(self, max_filename_length: int = 100):
-        """
-        Initialize the parser.
-
-        Args:
-            max_filename_length: Maximum length for generated filenames
-        """
-        self.max_filename_length = max_filename_length
-
-    def sanitize_filename(self, name: str) -> str:
-        """
-        Convert conversation name to safe filename.
-
-        Args:
-            name: Original conversation name
-
-        Returns:
-            Sanitized filename without extension
-        """
-        # Remove/replace problematic characters
-        sanitized = re.sub(r'[<>:"/\\|?*]', "_", name)
-        sanitized = re.sub(r"\s+", "_", sanitized.strip())
-        sanitized = re.sub(r"_+", "_", sanitized)
-        sanitized = sanitized.strip("_.")
-
-        # Handle empty names
-        if not sanitized:
-            sanitized = "untitled_conversation"
-
-        # Truncate if too long
-        if len(sanitized) > self.max_filename_length:
-            sanitized = sanitized[: self.max_filename_length].rstrip("_")
-
-        return sanitized
 
     def extract_conversations(self, export_data: dict[str, Any]) -> list[dict[str, Any]]:
         """
@@ -89,10 +39,8 @@ class ConversationParser:
             List of conversation dictionaries
 
         Raises:
-            KeyError: If expected data structure is not found
             ValueError: If no conversations found in export
         """
-        # Handle different possible export structures
         conversations = None
 
         if "conversations" in export_data:
@@ -102,7 +50,6 @@ class ConversationParser:
         elif isinstance(export_data, list):
             conversations = export_data
         else:
-            # Try to find conversation-like structures
             for key, value in export_data.items():
                 if (
                     isinstance(value, list)
@@ -127,7 +74,6 @@ class ConversationParser:
         Returns:
             Latest ISO format timestamp or None if no timestamps found
         """
-        # Extract messages - handle both direct and nested structures
         messages = (
             conversation.get("messages", [])
             or conversation.get("chat_messages", [])
@@ -139,10 +85,8 @@ class ConversationParser:
 
         timestamps = []
 
-        # Extract timestamps from messages
         for message in messages:
             if isinstance(message, dict):
-                # Try various timestamp field names
                 timestamp_fields = ["created_at", "timestamp", "time", "date"]
                 for field in timestamp_fields:
                     if field in message and message[field]:
@@ -152,9 +96,7 @@ class ConversationParser:
         if not timestamps:
             return None
 
-        # Sort timestamps and return the latest one
         try:
-            # Convert to datetime objects for proper sorting
             datetime_objects = []
             for ts in timestamps:
                 try:
@@ -164,15 +106,12 @@ class ConversationParser:
                     continue
 
             if datetime_objects:
-                # Sort by datetime and return the original timestamp string
                 datetime_objects.sort(key=lambda x: x[0])
-                return datetime_objects[-1][1]  # Return the latest timestamp
+                return datetime_objects[-1][1]
             else:
-                # Fallback to string sorting if datetime parsing fails
                 return sorted(timestamps)[-1]
 
         except Exception:
-            # If all else fails, just return the last timestamp
             return timestamps[-1] if timestamps else None
 
     def get_conversation_metadata(
@@ -188,7 +127,6 @@ class ConversationParser:
         Returns:
             ConversationMetadata object
         """
-        # Extract conversation ID - handle both direct and nested structures
         conv_id = (
             conversation.get("id")
             or conversation.get("uuid")
@@ -196,7 +134,6 @@ class ConversationParser:
             or f"conversation_{index:04d}"
         )
 
-        # Extract conversation name with fallbacks - handle nested structure
         name = (
             conversation.get("name")
             or conversation.get("title")
@@ -205,7 +142,6 @@ class ConversationParser:
             or f"Conversation {index + 1}"
         )
 
-        # Count messages - handle both 'messages' and 'chat_messages'
         messages = (
             conversation.get("messages", [])
             or conversation.get("chat_messages", [])
@@ -213,7 +149,6 @@ class ConversationParser:
         )
         message_count = len(messages) if isinstance(messages, list) else 0
 
-        # Extract timestamps - handle nested structure
         created_at = conversation.get("created_at") or conversation.get("conversation", {}).get(
             "created_at"
         )
@@ -221,13 +156,12 @@ class ConversationParser:
             "updated_at"
         )
 
-        # Find latest message timestamp
         latest_message_at = self.find_latest_message_timestamp(conversation)
 
         return ConversationMetadata(
             conversation_id=conv_id,
             name=name,
-            sanitized_filename=self.sanitize_filename(name),
+            sanitized_filename=sanitize_filename(name),
             message_count=message_count,
             created_at=created_at,
             updated_at=updated_at,
@@ -238,9 +172,6 @@ class ConversationParser:
 class ChatExportProcessor:
     """
     Main processor for handling Anthropic chat export files.
-
-    Coordinates file I/O, parsing, and conversation extraction with
-    proper error handling and progress reporting.
     """
 
     def __init__(self, export_file_path: str | Path, output_dir: Path | None = None):
@@ -259,6 +190,7 @@ class ChatExportProcessor:
         self.base_dir = output_dir if output_dir else self.export_path.parent
         self.output_dir: Path | None = None
         self.parser = ConversationParser()
+        self.provider_name = "anthropic"
 
     def load_export_data(self) -> dict[str, Any]:
         """
@@ -269,7 +201,6 @@ class ChatExportProcessor:
 
         Raises:
             json.JSONDecodeError: If file is not valid JSON
-            MemoryError: If file is too large for available memory
         """
         print(f"Loading export file: {self.export_path}")
         print(f"File size: {self.export_path.stat().st_size / (1024 * 1024):.1f} MB")
@@ -320,7 +251,7 @@ class ChatExportProcessor:
         file_stat = self.export_path.stat()
         return datetime.fromtimestamp(file_stat.st_ctime).strftime("%Y%m%d_%H%M%S")
 
-    def create_output_directory(self) -> None:
+    def create_output_directory(self, output_prefix: str) -> None:
         """Create output directory for individual conversation files."""
         self.output_dir.mkdir(exist_ok=True)
         print(f"Output directory: {self.output_dir}")
@@ -338,24 +269,19 @@ class ChatExportProcessor:
         Returns:
             Path to saved file
         """
-        # Use latest message timestamp for filename, fallback to conversation created_at
         timestamp_for_filename = metadata.latest_message_at or metadata.created_at
 
-        # Create filename with timestamp prefix
         date_prefix = ""
         if timestamp_for_filename:
             try:
-                # Parse ISO timestamp and format as YYYYMMDD_HHMMSS
                 dt = datetime.fromisoformat(timestamp_for_filename.replace("Z", "+00:00"))
                 date_prefix = dt.strftime("%Y%m%d_%H%M%S_")
             except (ValueError, AttributeError):
-                # Fallback if timestamp parsing fails
                 date_prefix = ""
 
         filename = f"{date_prefix}{metadata.sanitized_filename}.json"
         output_path = self.output_dir / filename
 
-        # Handle filename conflicts
         counter = 1
         while output_path.exists():
             base_name = f"{date_prefix}{metadata.sanitized_filename}"
@@ -363,10 +289,8 @@ class ChatExportProcessor:
             output_path = self.output_dir / filename
             counter += 1
 
-        # Sort messages by timestamp before saving
         sorted_conversation = self._sort_conversation_messages(conversation)
 
-        # Add metadata to conversation data
         conversation_with_metadata = {
             "metadata": {
                 "conversation_id": metadata.conversation_id,
@@ -409,9 +333,12 @@ class ChatExportProcessor:
 
         return result
 
-    def process_export(self) -> dict[str, Any]:
+    def process_export(self, output_prefix: str = "anthropic") -> dict[str, Any]:
         """
         Main processing method that orchestrates the entire operation.
+
+        Args:
+            output_prefix: Prefix for output directory name
 
         Returns:
             Summary statistics of the processing operation
@@ -425,9 +352,9 @@ class ChatExportProcessor:
 
         export_timestamp = self._get_export_timestamp(conversations)
         timestamp_str = self._format_timestamp_for_dir(export_timestamp)
-        self.output_dir = self.base_dir / f"anthropic_{self.export_path.stem}_{timestamp_str}"
+        self.output_dir = self.base_dir / f"{output_prefix}_{self.export_path.stem}_{timestamp_str}"
 
-        self.create_output_directory()
+        self.create_output_directory(output_prefix)
 
         processed_count = 0
         skipped_count = 0
@@ -475,7 +402,6 @@ def main():
             python parse_anthropic_json.py                      # Uses config.json
             python parse_anthropic_json.py <path_to_export>     # Process specific file
     """
-    import sys
     from pathlib import Path
 
     export_file_path = sys.argv[1] if len(sys.argv) > 1 else None
@@ -488,12 +414,8 @@ def main():
 
 def process_specific_file(export_file_path: Path):
     """Process a specific export file."""
-    output_dir = None
-    try:
-        config = Config.load()
-        output_dir = config.output_dir
-    except Exception:
-        pass
+    config = Config.load()
+    output_dir = config.output_dir
 
     with open(export_file_path, encoding="utf-8") as f:
         data = json.load(f)
@@ -504,7 +426,8 @@ def process_specific_file(export_file_path: Path):
 
     try:
         processor = ChatExportProcessor(export_file_path, output_dir=output_dir)
-        summary = processor.process_export()
+        provider_config = config.get_provider_config("anthropic")
+        summary = processor.process_export(output_prefix=provider_config.output_prefix)
 
         summary_path = processor.output_dir / "processing_summary.json"
         with open(summary_path, "w", encoding="utf-8") as f:
@@ -526,6 +449,8 @@ def process_from_config():
         print(f"No conversation*.json files found in {config.input_dir}")
         print("Run with a specific file, or add files to the input directory.")
         sys.exit(0)
+
+    provider_config = config.get_provider_config("anthropic")
 
     print(f"Input directory: {config.input_dir}")
     print(f"Output directory: {config.output_dir}")
@@ -549,7 +474,7 @@ def process_from_config():
 
         try:
             processor = ChatExportProcessor(input_file, output_dir=config.output_dir)
-            processor.process_export()
+            processor.process_export(output_prefix=provider_config.output_prefix)
 
             move_to_done(input_file, config.done_dir)
             print(f"Moved to: {config.done_dir / input_file.name}\n")

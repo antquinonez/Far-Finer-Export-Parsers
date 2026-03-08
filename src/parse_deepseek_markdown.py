@@ -6,17 +6,21 @@ markdown files for each conversation.
 """
 
 import json
-import re
 import sys
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from anthropic_parser.config import Config
-from anthropic_parser.file_manager import move_to_done
+from common import (
+    Config,
+    ConversationMetadata,
+    MarkdownFormatter,
+    MessageData,
+    move_to_done,
+    sanitize_filename,
+)
 from deepseek_parser import (
     extract_messages_from_mapping,
     is_deepseek_export,
@@ -24,129 +28,16 @@ from deepseek_parser import (
 )
 
 
-@dataclass
-class ConversationMetadata:
-    """Metadata for a parsed conversation."""
-
-    conversation_id: str
-    name: str
-    sanitized_filename: str
-    message_count: int
-    created_at: str | None = None
-    updated_at: str | None = None
-
-
-@dataclass
-class MessageData:
-    """Streamlined message data structure."""
-
-    sender: str
-    text: str
-    created_at: str | None = None
-
-
 class MessageExtractor:
-    """
-    Extracts and normalizes message data from DeepSeek export format.
-    """
+    """Extracts and normalizes message data from DeepSeek export format."""
 
     def process_message(self, message: dict[str, Any]) -> MessageData:
-        """
-        Process a raw message into streamlined format.
-
-        Args:
-            message: Raw message data from export
-
-        Returns:
-            MessageData with essential information
-        """
+        """Process a raw message into streamlined format."""
         return MessageData(
             sender=message.get("sender", "unknown"),
             text=message.get("text", ""),
             created_at=message.get("created_at"),
         )
-
-
-class MarkdownFormatter:
-    """Formats conversation data as markdown."""
-
-    @staticmethod
-    def format_timestamp(timestamp: str | None) -> str:
-        """Format ISO timestamp to readable format."""
-        if not timestamp:
-            return "N/A"
-
-        try:
-            dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-            return dt.strftime("%B %d, %Y at %I:%M %p")
-        except (ValueError, AttributeError):
-            return timestamp
-
-    @staticmethod
-    def format_sender_name(sender: str) -> str:
-        """Format sender name for display."""
-        sender_map = {
-            "human": "👤 Human",
-            "assistant": "🤖 Assistant",
-            "system": "⚙️ System",
-            "user": "👤 User",
-            "deepseek": "🤖 DeepSeek",
-            "unknown": "❓ Unknown",
-        }
-        return sender_map.get(sender.lower(), f"💬 {sender.title()}")
-
-    @staticmethod
-    def create_markdown_header(
-        metadata: ConversationMetadata, latest_message_time: str | None
-    ) -> str:
-        """Create the markdown header with conversation metadata."""
-        header_parts = []
-
-        header_parts.append(f"# {metadata.name}\n")
-
-        header_parts.append("## 📋 Conversation Details\n")
-        header_parts.append(f"- **Conversation ID:** `{metadata.conversation_id}`")
-        header_parts.append(f"- **Total Messages:** {metadata.message_count}")
-
-        if metadata.created_at:
-            formatted_created = MarkdownFormatter.format_timestamp(metadata.created_at)
-            header_parts.append(f"- **Started:** {formatted_created}")
-
-        if latest_message_time:
-            formatted_latest = MarkdownFormatter.format_timestamp(latest_message_time)
-            header_parts.append(f"- **Last Message:** {formatted_latest}")
-        elif metadata.updated_at:
-            formatted_updated = MarkdownFormatter.format_timestamp(metadata.updated_at)
-            header_parts.append(f"- **Last Updated:** {formatted_updated}")
-
-        header_parts.append("\n---\n")
-        header_parts.append("## 💬 Conversation\n")
-
-        return "\n".join(header_parts)
-
-    @staticmethod
-    def format_message(message: dict[str, Any], index: int) -> str:
-        """Format a single message as markdown."""
-        sender = MarkdownFormatter.format_sender_name(message.get("sender", "unknown"))
-        text = message.get("text", "[No content]")
-        timestamp = message.get("created_at")
-
-        formatted_text = text.strip()
-
-        message_parts = []
-
-        message_parts.append(f"### {sender}")
-
-        if timestamp:
-            formatted_time = MarkdownFormatter.format_timestamp(timestamp)
-            message_parts.append(f"*{formatted_time}*")
-
-        message_parts.append("")
-
-        message_parts.append(formatted_text)
-        message_parts.append("")
-
-        return "\n".join(message_parts)
 
 
 class ConversationParser:
@@ -155,54 +46,14 @@ class ConversationParser:
     with streamlined message format.
     """
 
-    def __init__(self, max_filename_length: int = 100):
-        """
-        Initialize the parser.
-
-        Args:
-            max_filename_length: Maximum length for generated filenames
-        """
-        self.max_filename_length = max_filename_length
+    def __init__(self):
+        """Initialize the parser."""
         self.message_extractor = MessageExtractor()
-
-    def sanitize_filename(self, name: str) -> str:
-        """
-        Convert conversation name to safe filename.
-
-        Args:
-            name: Original conversation name
-
-        Returns:
-            Sanitized filename without extension
-        """
-        sanitized = re.sub(r'[<>:"/\\|?*]', "_", name)
-        sanitized = re.sub(r"\s+", "_", sanitized.strip())
-        sanitized = re.sub(r"_+", "_", sanitized)
-        sanitized = sanitized.strip("_.")
-
-        if not sanitized:
-            sanitized = "untitled_conversation"
-
-        if len(sanitized) > self.max_filename_length:
-            sanitized = sanitized[: self.max_filename_length].rstrip("_")
-
-        return sanitized
 
     def extract_conversations(
         self, export_data: dict[str, Any] | list[Any]
     ) -> list[dict[str, Any]]:
-        """
-        Extract conversations from export data structure.
-
-        Args:
-            export_data: Parsed JSON export data
-
-        Returns:
-            List of conversation dictionaries
-
-        Raises:
-            ValueError: If no conversations found in export
-        """
+        """Extract conversations from export data structure."""
         conversations = None
 
         if isinstance(export_data, list):
@@ -225,16 +76,7 @@ class ConversationParser:
     def get_conversation_metadata(
         self, conversation: dict[str, Any], index: int
     ) -> ConversationMetadata:
-        """
-        Extract metadata from a conversation object.
-
-        Args:
-            conversation: Single conversation data
-            index: Conversation index for fallback naming
-
-        Returns:
-            ConversationMetadata object
-        """
+        """Extract metadata from a conversation object."""
         conv_id = conversation.get("id") or f"conversation_{index:04d}"
 
         name = conversation.get("title") or conversation.get("name") or f"Conversation {index + 1}"
@@ -249,22 +91,14 @@ class ConversationParser:
         return ConversationMetadata(
             conversation_id=conv_id,
             name=name,
-            sanitized_filename=self.sanitize_filename(name),
+            sanitized_filename=sanitize_filename(name),
             message_count=message_count,
             created_at=created_at,
             updated_at=updated_at,
         )
 
     def process_conversation_messages(self, conversation: dict[str, Any]) -> list[dict[str, Any]]:
-        """
-        Process conversation messages into streamlined format.
-
-        Args:
-            conversation: Raw conversation data
-
-        Returns:
-            List of processed messages with only essential data
-        """
+        """Process conversation messages into streamlined format."""
         mapping = conversation.get("mapping", {})
         messages = extract_messages_from_mapping(mapping)
         messages = sort_messages_by_timestamp(messages)
@@ -291,15 +125,7 @@ class ConversationParser:
         return processed_messages
 
     def find_latest_message_timestamp(self, messages: list[dict[str, Any]]) -> str | None:
-        """
-        Find the latest created_at timestamp from a list of messages.
-
-        Args:
-            messages: List of message dictionaries
-
-        Returns:
-            Latest ISO format timestamp or None if no timestamps found
-        """
+        """Find the latest created_at timestamp from a list of messages."""
         timestamps = []
 
         for message in messages:
@@ -336,13 +162,7 @@ class ChatExportProcessor:
     """
 
     def __init__(self, export_file_path: str | Path, output_dir: Path | None = None):
-        """
-        Initialize processor with export file path.
-
-        Args:
-            export_file_path: Path to the DeepSeek export JSON file
-            output_dir: Optional output directory (uses input file's dir if not provided)
-        """
+        """Initialize processor with export file path."""
         self.export_path = Path(export_file_path)
 
         if not self.export_path.exists():
@@ -351,18 +171,10 @@ class ChatExportProcessor:
         self.base_dir = output_dir if output_dir else self.export_path.parent
         self.output_dir: Path | None = None
         self.parser = ConversationParser()
-        self.formatter = MarkdownFormatter()
+        self.formatter: MarkdownFormatter | None = None
 
     def load_export_data(self) -> dict[str, Any] | list[Any]:
-        """
-        Load and parse the export JSON file.
-
-        Returns:
-            Parsed JSON data
-
-        Raises:
-            json.JSONDecodeError: If file is not valid JSON
-        """
+        """Load and parse the export JSON file."""
         print(f"Loading export file: {self.export_path}")
         print(f"File size: {self.export_path.stat().st_size / (1024 * 1024):.1f} MB")
 
@@ -373,15 +185,7 @@ class ChatExportProcessor:
             raise json.JSONDecodeError(f"Invalid JSON in export file: {e.msg}", e.doc, e.pos)
 
     def _get_export_timestamp(self, conversations: list[dict[str, Any]]) -> str | None:
-        """
-        Find the latest updated_at timestamp from all conversations.
-
-        Args:
-            conversations: List of conversation dictionaries
-
-        Returns:
-            Latest ISO format timestamp or None if not found
-        """
+        """Find the latest updated_at timestamp from all conversations."""
         timestamps = []
         for conv in conversations:
             if conv.get("updated_at"):
@@ -393,15 +197,7 @@ class ChatExportProcessor:
         return max(timestamps)
 
     def _format_timestamp_for_dir(self, timestamp: str | None) -> str:
-        """
-        Format timestamp for directory name as YYYYMMDD_HHMMSS.
-
-        Args:
-            timestamp: ISO format timestamp or None
-
-        Returns:
-            Formatted timestamp string or fallback to file creation time
-        """
+        """Format timestamp for directory name as YYYYMMDD_HHMMSS."""
         if timestamp:
             try:
                 dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
@@ -420,16 +216,7 @@ class ChatExportProcessor:
     def save_conversation_as_markdown(
         self, conversation: dict[str, Any], metadata: ConversationMetadata
     ) -> Path:
-        """
-        Save individual conversation to markdown file.
-
-        Args:
-            conversation: Raw conversation data
-            metadata: Conversation metadata for naming
-
-        Returns:
-            Path to saved file
-        """
+        """Save individual conversation to markdown file."""
         processed_messages = self.parser.process_conversation_messages(conversation)
 
         latest_timestamp = self.parser.find_latest_message_timestamp(processed_messages)
@@ -473,13 +260,12 @@ class ChatExportProcessor:
 
         return output_path
 
-    def process_export(self) -> dict[str, Any]:
-        """
-        Main processing method that orchestrates the entire operation.
+    def process_export(
+        self, output_prefix: str = "deepseek", assistant_display_name: str = "DeepSeek"
+    ) -> dict[str, Any]:
+        """Main processing method that orchestrates the entire operation."""
+        self.formatter = MarkdownFormatter(assistant_display_name=assistant_display_name)
 
-        Returns:
-            Summary statistics of the processing operation
-        """
         print("Starting DeepSeek chat export processing (Markdown output)...")
 
         export_data = self.load_export_data()
@@ -490,7 +276,7 @@ class ChatExportProcessor:
         export_timestamp = self._get_export_timestamp(conversations)
         timestamp_str = self._format_timestamp_for_dir(export_timestamp)
         self.output_dir = (
-            self.base_dir / f"deepseek_{self.export_path.stem}_{timestamp_str}_markdown"
+            self.base_dir / f"{output_prefix}_{self.export_path.stem}_{timestamp_str}_markdown"
         )
 
         self.create_output_directory()
@@ -535,13 +321,7 @@ class ChatExportProcessor:
 
 
 def main():
-    """
-    CLI entry point for the chat export processor.
-
-    Usage:
-            python parse_deepseek_markdown.py                      # Uses config.json
-            python parse_deepseek_markdown.py <path_to_export>     # Process specific file
-    """
+    """CLI entry point."""
     from pathlib import Path
 
     export_file_path = sys.argv[1] if len(sys.argv) > 1 else None
@@ -554,12 +334,8 @@ def main():
 
 def process_specific_file(export_file_path: Path):
     """Process a specific export file."""
-    output_dir = None
-    try:
-        config = Config.load()
-        output_dir = config.output_dir
-    except Exception:
-        pass
+    config = Config.load()
+    output_dir = config.output_dir
 
     with open(export_file_path, encoding="utf-8") as f:
         data = json.load(f)
@@ -570,7 +346,11 @@ def process_specific_file(export_file_path: Path):
 
     try:
         processor = ChatExportProcessor(export_file_path, output_dir=output_dir)
-        summary = processor.process_export()
+        provider_config = config.get_provider_config("deepseek")
+        summary = processor.process_export(
+            output_prefix=provider_config.output_prefix,
+            assistant_display_name=provider_config.assistant_display_name,
+        )
 
         summary_path = processor.output_dir / "processing_summary.json"
         with open(summary_path, "w", encoding="utf-8") as f:
@@ -596,6 +376,8 @@ def process_from_config():
         print("Run with a specific file, or add files to the input directory.")
         sys.exit(0)
 
+    provider_config = config.get_provider_config("deepseek")
+
     print(f"Input directory: {config.input_dir}")
     print(f"Output directory: {config.output_dir}")
     print(f"Found {len(input_files)} file(s) to process\n")
@@ -618,7 +400,10 @@ def process_from_config():
 
         try:
             processor = ChatExportProcessor(input_file, output_dir=config.output_dir)
-            processor.process_export()
+            processor.process_export(
+                output_prefix=provider_config.output_prefix,
+                assistant_display_name=provider_config.assistant_display_name,
+            )
 
             move_to_done(input_file, config.done_dir)
             print(f"Moved to: {config.done_dir / input_file.name}\n")

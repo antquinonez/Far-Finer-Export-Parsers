@@ -6,17 +6,19 @@ into separate files with proper naming conventions.
 """
 
 import json
-import re
 import sys
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from anthropic_parser.config import Config
-from anthropic_parser.file_manager import move_to_done
+from common import (
+    Config,
+    ConversationMetadata,
+    move_to_done,
+    sanitize_filename,
+)
 from deepseek_parser import (
     extract_messages_from_mapping,
     is_deepseek_export,
@@ -24,74 +26,15 @@ from deepseek_parser import (
 )
 
 
-@dataclass
-class ConversationMetadata:
-    """Metadata for a parsed conversation."""
-
-    conversation_id: str
-    name: str
-    sanitized_filename: str
-    message_count: int
-    created_at: str | None = None
-    updated_at: str | None = None
-    latest_message_at: str | None = None
-
-
 class ConversationParser:
     """
     Parses DeepSeek chat export data and extracts individual conversations.
-
-    Handles DeepSeek's tree-based mapping structure and provides clean separation
-    of parsing logic from file operations.
     """
-
-    def __init__(self, max_filename_length: int = 100):
-        """
-        Initialize the parser.
-
-        Args:
-            max_filename_length: Maximum length for generated filenames
-        """
-        self.max_filename_length = max_filename_length
-
-    def sanitize_filename(self, name: str) -> str:
-        """
-        Convert conversation name to safe filename.
-
-        Args:
-            name: Original conversation name
-
-        Returns:
-            Sanitized filename without extension
-        """
-        sanitized = re.sub(r'[<>:"/\\|?*]', "_", name)
-        sanitized = re.sub(r"\s+", "_", sanitized.strip())
-        sanitized = re.sub(r"_+", "_", sanitized)
-        sanitized = sanitized.strip("_.")
-
-        if not sanitized:
-            sanitized = "untitled_conversation"
-
-        if len(sanitized) > self.max_filename_length:
-            sanitized = sanitized[: self.max_filename_length].rstrip("_")
-
-        return sanitized
 
     def extract_conversations(
         self, export_data: dict[str, Any] | list[Any]
     ) -> list[dict[str, Any]]:
-        """
-        Extract conversations from export data structure.
-
-        Args:
-            export_data: Parsed JSON export data
-
-        Returns:
-            List of conversation dictionaries
-
-        Raises:
-            ValueError: If no conversations found in export
-        """
+        """Extract conversations from export data structure."""
         conversations = None
 
         if isinstance(export_data, list):
@@ -112,15 +55,7 @@ class ConversationParser:
         return conversations
 
     def find_latest_message_timestamp(self, conversation: dict[str, Any]) -> str | None:
-        """
-        Find the latest inserted_at timestamp from messages in a conversation.
-
-        Args:
-            conversation: Conversation data
-
-        Returns:
-            Latest ISO format timestamp or None if no timestamps found
-        """
+        """Find the latest inserted_at timestamp from messages in a conversation."""
         mapping = conversation.get("mapping", {})
         if not mapping:
             return None
@@ -155,16 +90,7 @@ class ConversationParser:
     def get_conversation_metadata(
         self, conversation: dict[str, Any], index: int
     ) -> ConversationMetadata:
-        """
-        Extract metadata from a conversation object.
-
-        Args:
-            conversation: Single conversation data
-            index: Conversation index for fallback naming
-
-        Returns:
-            ConversationMetadata object
-        """
+        """Extract metadata from a conversation object."""
         conv_id = conversation.get("id") or f"conversation_{index:04d}"
 
         name = conversation.get("title") or conversation.get("name") or f"Conversation {index + 1}"
@@ -181,7 +107,7 @@ class ConversationParser:
         return ConversationMetadata(
             conversation_id=conv_id,
             name=name,
-            sanitized_filename=self.sanitize_filename(name),
+            sanitized_filename=sanitize_filename(name),
             message_count=message_count,
             created_at=created_at,
             updated_at=updated_at,
@@ -190,21 +116,10 @@ class ConversationParser:
 
 
 class ChatExportProcessor:
-    """
-    Main processor for handling DeepSeek chat export files.
-
-    Coordinates file I/O, parsing, and conversation extraction with
-    proper error handling and progress reporting.
-    """
+    """Main processor for handling DeepSeek chat export files."""
 
     def __init__(self, export_file_path: str | Path, output_dir: Path | None = None):
-        """
-        Initialize processor with export file path.
-
-        Args:
-            export_file_path: Path to the DeepSeek export JSON file
-            output_dir: Optional output directory (uses input file's dir if not provided)
-        """
+        """Initialize processor with export file path."""
         self.export_path = Path(export_file_path)
 
         if not self.export_path.exists():
@@ -215,15 +130,7 @@ class ChatExportProcessor:
         self.parser = ConversationParser()
 
     def load_export_data(self) -> dict[str, Any] | list[Any]:
-        """
-        Load and parse the export JSON file.
-
-        Returns:
-            Parsed JSON data
-
-        Raises:
-            json.JSONDecodeError: If file is not valid JSON
-        """
+        """Load and parse the export JSON file."""
         print(f"Loading export file: {self.export_path}")
         print(f"File size: {self.export_path.stat().st_size / (1024 * 1024):.1f} MB")
 
@@ -234,15 +141,7 @@ class ChatExportProcessor:
             raise json.JSONDecodeError(f"Invalid JSON in export file: {e.msg}", e.doc, e.pos)
 
     def _get_export_timestamp(self, conversations: list[dict[str, Any]]) -> str | None:
-        """
-        Find the latest updated_at timestamp from all conversations.
-
-        Args:
-            conversations: List of conversation dictionaries
-
-        Returns:
-            Latest ISO format timestamp or None if not found
-        """
+        """Find the latest updated_at timestamp from all conversations."""
         timestamps = []
         for conv in conversations:
             if conv.get("updated_at"):
@@ -254,15 +153,7 @@ class ChatExportProcessor:
         return max(timestamps)
 
     def _format_timestamp_for_dir(self, timestamp: str | None) -> str:
-        """
-        Format timestamp for directory name as YYYYMMDD_HHMMSS.
-
-        Args:
-            timestamp: ISO format timestamp or None
-
-        Returns:
-            Formatted timestamp string or fallback to file creation time
-        """
+        """Format timestamp for directory name as YYYYMMDD_HHMMSS."""
         if timestamp:
             try:
                 dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
@@ -281,16 +172,7 @@ class ChatExportProcessor:
     def save_conversation(
         self, conversation: dict[str, Any], metadata: ConversationMetadata
     ) -> Path:
-        """
-        Save individual conversation to JSON file.
-
-        Args:
-            conversation: Conversation data to save
-            metadata: Conversation metadata for naming
-
-        Returns:
-            Path to saved file
-        """
+        """Save individual conversation to JSON file."""
         timestamp_for_filename = metadata.latest_message_at or metadata.created_at
 
         date_prefix = ""
@@ -337,13 +219,8 @@ class ChatExportProcessor:
 
         return output_path
 
-    def process_export(self) -> dict[str, Any]:
-        """
-        Main processing method that orchestrates the entire operation.
-
-        Returns:
-            Summary statistics of the processing operation
-        """
+    def process_export(self, output_prefix: str = "deepseek") -> dict[str, Any]:
+        """Main processing method that orchestrates the entire operation."""
         print("Starting DeepSeek chat export processing...")
 
         export_data = self.load_export_data()
@@ -353,7 +230,7 @@ class ChatExportProcessor:
 
         export_timestamp = self._get_export_timestamp(conversations)
         timestamp_str = self._format_timestamp_for_dir(export_timestamp)
-        self.output_dir = self.base_dir / f"deepseek_{self.export_path.stem}_{timestamp_str}"
+        self.output_dir = self.base_dir / f"{output_prefix}_{self.export_path.stem}_{timestamp_str}"
 
         self.create_output_directory()
 
@@ -396,13 +273,7 @@ class ChatExportProcessor:
 
 
 def main():
-    """
-    CLI entry point for the chat export processor.
-
-    Usage:
-            python parse_deepseek_json.py                      # Uses config.json
-            python parse_deepseek_json.py <path_to_export>     # Process specific file
-    """
+    """CLI entry point."""
     from pathlib import Path
 
     export_file_path = sys.argv[1] if len(sys.argv) > 1 else None
@@ -415,12 +286,8 @@ def main():
 
 def process_specific_file(export_file_path: Path):
     """Process a specific export file."""
-    output_dir = None
-    try:
-        config = Config.load()
-        output_dir = config.output_dir
-    except Exception:
-        pass
+    config = Config.load()
+    output_dir = config.output_dir
 
     with open(export_file_path, encoding="utf-8") as f:
         data = json.load(f)
@@ -431,7 +298,8 @@ def process_specific_file(export_file_path: Path):
 
     try:
         processor = ChatExportProcessor(export_file_path, output_dir=output_dir)
-        summary = processor.process_export()
+        provider_config = config.get_provider_config("deepseek")
+        summary = processor.process_export(output_prefix=provider_config.output_prefix)
 
         summary_path = processor.output_dir / "processing_summary.json"
         with open(summary_path, "w", encoding="utf-8") as f:
@@ -453,6 +321,8 @@ def process_from_config():
         print(f"No conversation*.json files found in {config.input_dir}")
         print("Run with a specific file, or add files to the input directory.")
         sys.exit(0)
+
+    provider_config = config.get_provider_config("deepseek")
 
     print(f"Input directory: {config.input_dir}")
     print(f"Output directory: {config.output_dir}")
@@ -476,7 +346,7 @@ def process_from_config():
 
         try:
             processor = ChatExportProcessor(input_file, output_dir=config.output_dir)
-            processor.process_export()
+            processor.process_export(output_prefix=provider_config.output_prefix)
 
             move_to_done(input_file, config.done_dir)
             print(f"Moved to: {config.done_dir / input_file.name}\n")
