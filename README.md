@@ -61,15 +61,57 @@ python src/parse_anthropic_markdown.py <path_to_export.json>
 
 ### Output Location
 
-Each parser creates a timestamped output directory next to the input file:
+Each parser creates a timestamped output directory in the same location as the input file (or in the configured output directory):
 
 ```
-<path_to_export.json>_conversations_YYYYMMDD/
+anthropic_{stem}_{YYYYMMDD_HHMMSS}/           # Full JSON
+anthropic_{stem}_{YYYYMMDD_HHMMSS}_simple/    # Simple JSON
+anthropic_{stem}_{YYYYMMDD_HHMMSS}_markdown/  # Markdown
 ```
 
-With subdirectories:
-- `_simple/` for simplified JSON
-- `_markdown/` for markdown files
+For example, processing `conversations.json` creates:
+- `anthropic_conversations_20260305_160057/`
+- `anthropic_conversations_20260305_160057_simple/`
+- `anthropic_conversations_20260305_160057_markdown/`
+
+The timestamp is extracted from the export data (latest `updated_at` field) with a fallback to file creation time.
+
+### Batch Processing
+
+Process all `conversation*.json` files in the input directory using `config.json`:
+
+```bash
+# Without arguments, uses config.json for input/output paths
+python src/parse_anthropic_json.py
+python src/parse_anthropic_json_simple.py
+python src/parse_anthropic_markdown.py
+```
+
+A `config.json` is auto-created on first run with defaults:
+- Input: `./input/`
+- Output: `./output/`
+- Processed files moved to: `./input/done/`
+
+For `conversations.json`, the output directories would be:
+- `anthropic_conversations_20260305_160057/` (full JSON)
+- `anthropic_conversations_20260305_160057_simple/` (simple JSON)
+- `anthropic_conversations_20260305_160057_markdown/` (markdown)
+
+### Batch Processing
+
+Process all `conversation*.json` files in the input directory using `config.json`:
+
+```bash
+# Without arguments, processes all files in input directory
+python src/parse_anthropic_json.py
+python src/parse_anthropic_json_simple.py
+python src/parse_anthropic_markdown.py
+```
+
+A `config.json` file is auto-created on first run with defaults:
+- Input directory: `./input/`
+- Output directory: `./output/`
+- Processed files moved to: `./input/done/`
 
 ## Development
 
@@ -80,10 +122,10 @@ With subdirectories:
 pytest
 
 # Run specific test file
-pytest tests/test_parser.py
+pytest tests/test_parsers.py
 
 # Run single test with verbose output
-pytest tests/test_parser.py::test_extract_message_text -v
+pytest tests/test_parsers.py::TestFullJsonParser::test_sanitize_filename_special_chars -v
 
 # Run with coverage
 pytest --cov=src tests/
